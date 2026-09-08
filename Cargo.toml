@@ -1,0 +1,19 @@
+[package]
+name = "aegis_core"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Rust static scanner for Aegis-Tensor"
+license = "Apache-2.0"
+
+[lib]
+name = "aegis_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+memmap2 = "0.9"
+safetensors = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rayon = "1.10"
+byteorder = "1.5"

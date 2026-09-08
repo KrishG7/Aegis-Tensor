@@ -1,0 +1,52 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "aegis-tensor"
+version = "0.1.0"
+description = "Adversarial security tool detecting Steganography and Sleeper Agent Trojans in safetensors AI models"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "Aegis-Tensor Team" }
+]
+license = { text = "Apache-2.0" }
+keywords = ["security", "ai-safety", "safetensors", "steganography", "trojans", "rust", "pyo3"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "numpy>=1.24.0",
+    "safetensors>=0.4.0",
+]
+
+[project.optional-dependencies]
+fuzzer = [
+    "torch>=2.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "maturin>=1.5.0",
+]
+
+[project.scripts]
+aegis = "aegis.cli:app"
+
+[tool.maturin]
+module-name = "aegis.aegis_core"
+features = ["pyo3/extension-module"]
+python-source = "."
