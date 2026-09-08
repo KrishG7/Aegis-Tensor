@@ -127,6 +127,7 @@ print(f"Suspicious layers: {report.suspicious_layers}")
 ---
 
 ## 📚 Project Documentation
+- [Academic Research Compendium & Literature Review](docs/RESEARCH_COMPENDIUM.md) *(Deep-dive survey, IEEE/ACM citations, mathematical models)*
 - [System Requirements & Threat Model](docs/REQUIREMENTS.md)
 - [Technology Stack Specification](docs/TECH_STACK.md)
 - [Deep Architectural & Mathematical Specification](docs/ARCHITECTURE.md)
