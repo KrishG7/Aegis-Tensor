@@ -8,7 +8,7 @@ on:
 
 jobs:
   rust-check:
-    name: Rust Check & Test
+    name: Rust Check & Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,22 +20,26 @@ jobs:
           python-version: "3.11"
       - name: Cargo Check
         run: cargo check --verbose
-      - name: Cargo Test
-        run: cargo test --verbose
+      - name: Cargo Unit Tests (Zero entropy, Benford MAD, digit extraction)
+        run: cargo test --no-default-features --verbose
 
   python-check:
-    name: Python Lint & Syntax Check
+    name: Python Build & Integration Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies
+      - name: Install dependencies & Maturin
         run: |
           python -m pip install --upgrade pip
-          pip install flake8
-      - name: Compile python files
-        run: |
-          python -m py_compile aegis/__init__.py aegis/cli.py aegis/fuzzer.py
+          pip install maturin pytest typer rich numpy safetensors
+      - name: Build Native Rust Extension
+        run: maturin develop
+      - name: Run Test Suite (CLI, Entropy, Fuzzer)
+        run: pytest -v tests/
+
