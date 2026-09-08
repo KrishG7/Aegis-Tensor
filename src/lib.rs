@@ -214,3 +214,75 @@ fn aegis_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scan_safetensors, m)?)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zero_entropy_for_identical_bytes() {
+        let zeros = vec![0u8; 1000];
+        assert_eq!(shannon_entropy_bytes(&zeros), 0.0);
+
+        let ones = vec![0xFFu8; 500];
+        assert_eq!(shannon_entropy_bytes(&ones), 0.0);
+    }
+
+    #[test]
+    fn test_high_entropy_for_uniform_distribution() {
+        // Construct exact uniform distribution of all 256 byte values
+        let mut uniform = Vec::new();
+        for _ in 0..100 {
+            for b in 0..=255u8 {
+                uniform.push(b);
+            }
+        }
+        let entropy = shannon_entropy_bytes(&uniform);
+        // Shannon entropy of uniform 256 values is exactly 8.0 bits
+        assert!((entropy - 8.0).abs() < 1e-4, "Entropy was {}", entropy);
+    }
+
+    #[test]
+    fn test_extract_leading_digit() {
+        assert_eq!(extract_leading_digit(1.234), 1);
+        assert_eq!(extract_leading_digit(9.99), 9);
+        assert_eq!(extract_leading_digit(45.67), 4);
+        assert_eq!(extract_leading_digit(0.00345), 3);
+        assert_eq!(extract_leading_digit(0.789), 7);
+    }
+
+    #[test]
+    fn test_benford_mad_low_for_ideal_distribution() {
+        // Generate synthetic numbers distributed according to Benford's Law
+        let mut benford_samples = Vec::new();
+        let total_samples = 10000;
+
+        for d in 1..=9 {
+            let p_d = (1.0 + 1.0 / (d as f64)).log10();
+            let count = (p_d * total_samples as f64).round() as usize;
+            for i in 0..count {
+                benford_samples.push(d as f32 + (i as f32 / count as f32) * 0.9);
+            }
+        }
+
+        let mad = calculate_benford_mad_slice(&benford_samples);
+        // Synthetic Benford distribution should have very low MAD (< 0.005)
+        assert!(mad < 0.005, "Expected MAD < 0.005, got {}", mad);
+    }
+
+    #[test]
+    fn test_benford_mad_high_for_uniform_digits() {
+        // Uniform digit distribution (e.g. synthetic/encrypted data)
+        let mut uniform_digits = Vec::new();
+        for _ in 0..1000 {
+            for d in 1..=9 {
+                uniform_digits.push(d as f32 + 0.5);
+            }
+        }
+
+        let mad = calculate_benford_mad_slice(&uniform_digits);
+        // Non-Benford distribution exhibits significant MAD (> 0.03)
+        assert!(mad > 0.03, "Expected MAD > 0.03, got {}", mad);
+    }
+}
+
