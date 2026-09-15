@@ -1,10 +1,11 @@
-"""Tests for Aegis-Tensor CLI."""
-
+import json
+import os
+import re
 import subprocess
 import sys
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
 import pytest
 from typer.testing import CliRunner
 
@@ -13,16 +14,25 @@ from aegis.fuzzer import TrojanScanReport, FuzzIterationReport, LayerActivationS
 
 
 runner = CliRunner()
+ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\([a-zA-Z]")
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess:
-    """Helper to run Aegis CLI in a subprocess with robust UTF-8 encoding."""
-    return subprocess.run(
+    """Helper to run Aegis CLI in a subprocess with robust UTF-8 encoding and ANSI stripping."""
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env["TERM"] = "dumb"
+    res = subprocess.run(
         [sys.executable, "-m", "aegis.cli", *args],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
     )
+    # Strip any ANSI escape sequences that Rich/Typer emits on Linux/macOS terminals
+    res.stdout = ANSI_REGEX.sub("", res.stdout)
+    res.stderr = ANSI_REGEX.sub("", res.stderr)
+    return res
 
 
 def test_cli_version():
