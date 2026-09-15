@@ -122,6 +122,7 @@ class DynamicTrojanFuzzer:
         sample_inputs_generator: Callable[[int], Any],
         baseline_input: Any,
         num_iterations: int = 50,
+        progress_callback: Optional[Callable[[int, int, str, float], None]] = None,
     ) -> TrojanScanReport:
         """Run fuzzing over generated sample inputs and compare against baseline activations."""
         hook_mgr = ActivationHookManager(self.model)
@@ -178,6 +179,9 @@ class DynamicTrojanFuzzer:
                         highest_layer=iter_top_layer,
                     )
                 )
+
+                if progress_callback is not None:
+                    progress_callback(i + 1, num_iterations, iter_top_layer, iter_max)
 
             spike_ratio = peak_fuzzed_l_inf / baseline_max_l_inf
             suspected_trojan = spike_ratio >= self.spike_threshold or len(suspicious_layers) > 0
