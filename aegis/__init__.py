@@ -33,6 +33,15 @@ from aegis.fuzzer import (
     TORCH_AVAILABLE,
 )
 
+# SARIF Reporting imports
+from aegis.reporting import (
+    SarifReportBuilder,
+    export_scan_sarif,
+    export_fuzz_sarif,
+    SARIF_VERSION,
+    SARIF_SCHEMA_URI,
+)
+
 __all__ = [
     "__version__",
     "CORE_AVAILABLE",
@@ -45,4 +54,9 @@ __all__ = [
     "ActivationHookManager",
     "TrojanScanReport",
     "LayerActivationStat",
+    "SarifReportBuilder",
+    "export_scan_sarif",
+    "export_fuzz_sarif",
+    "SARIF_VERSION",
+    "SARIF_SCHEMA_URI",
 ]

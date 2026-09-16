@@ -66,6 +66,7 @@ def test_cli_scan_help():
     assert "entropy-threshold" in result.stdout
     assert "benford-threshold" in result.stdout
     assert "output-json" in result.stdout
+    assert "output-sarif" in result.stdout
 
 
 def test_cli_fuzz_help():
@@ -76,6 +77,7 @@ def test_cli_fuzz_help():
     assert "iterations" in result.stdout
     assert "input-shape" in result.stdout
     assert "output-json" in result.stdout
+    assert "output-sarif" in result.stdout
 
 
 def test_cli_fuzz_missing_model(tmp_path):
@@ -116,11 +118,44 @@ def test_cli_scan_missing_model(tmp_path):
     assert "not found" in result.stdout.lower()
 
 
+def test_cli_scan_mocked_sarif_export(tmp_path):
+    """Verify that `aegis scan` exports valid SARIF 2.1.0 report when requested."""
+    st_file = tmp_path / "model.safetensors"
+    st_file.touch()
+    sarif_out = tmp_path / "scan_output.sarif"
+
+    mock_scan_res = MagicMock()
+    mock_scan_res.is_suspicious = True
+    mock_scan_res.name = "encoder.layer.0.attention.weight"
+    mock_scan_res.dtype = "F32"
+    mock_scan_res.shape = [768, 768]
+    mock_scan_res.entropy = 7.96
+    mock_scan_res.benford_mad = 0.05
+    mock_scan_res.anomaly_reasons = ["High entropy payload"]
+
+    with patch("aegis.cli.CORE_AVAILABLE", True), \
+         patch("aegis.cli.scan_safetensors", return_value=[mock_scan_res]):
+        res = runner.invoke(app, [
+            "scan",
+            str(st_file),
+            "--output-sarif", str(sarif_out),
+        ])
+
+        assert res.exit_code == 0
+        assert sarif_out.exists()
+
+        data = json.loads(sarif_out.read_text(encoding="utf-8"))
+        assert data["version"] == "2.1.0"
+        assert len(data["runs"][0]["results"]) == 1
+        assert data["runs"][0]["results"][0]["ruleId"] == "aegis/steganography-detected"
+
+
 def test_cli_fuzz_mocked_execution(tmp_path):
     """Verify full end-to-end execution of `aegis fuzz` with rich reporting and JSON export."""
     dummy_model_file = tmp_path / "model.pt"
     dummy_model_file.touch()
     json_out = tmp_path / "fuzz_results.json"
+    sarif_out = tmp_path / "fuzz_results.sarif"
 
     fake_report = TrojanScanReport(
         model_name="MockTransformer",
@@ -163,6 +198,7 @@ def test_cli_fuzz_mocked_execution(tmp_path):
             "--iterations", "5",
             "--spike-threshold", "4.0",
             "--output-json", str(json_out),
+            "--output-sarif", str(sarif_out),
         ])
 
         assert res.exit_code == 0
@@ -171,8 +207,14 @@ def test_cli_fuzz_mocked_execution(tmp_path):
         assert "SPIKE DETECTED" in res.stdout
         assert "CRITICAL MALWARE" in res.stdout or "SUSPICIOUS ANOMALY" in res.stdout
         assert json_out.exists()
+        assert sarif_out.exists()
 
         data = json.loads(json_out.read_text())
         assert data["spike_ratio"] == 6.0
         assert data["suspected_trojan"] is True
         assert "transformer.layer.2" in data["suspicious_layers"]
+
+        sarif_data = json.loads(sarif_out.read_text())
+        assert sarif_data["version"] == "2.1.0"
+        assert len(sarif_data["runs"][0]["results"]) == 1
+        assert sarif_data["runs"][0]["results"][0]["ruleId"] == "aegis/trojan-spike-detected"

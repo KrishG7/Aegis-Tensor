@@ -40,6 +40,8 @@ from aegis import (
     TORCH_AVAILABLE,
     scan_safetensors,
     DynamicTrojanFuzzer,
+    export_scan_sarif,
+    export_fuzz_sarif,
 )
 
 def get_risk_badge(level: str) -> str:
@@ -111,6 +113,11 @@ def scan_command(
         "--output-json",
         "-o",
         help="Save full scan report to a JSON file.",
+    ),
+    sarif_output: Optional[Path] = typer.Option(
+        None,
+        "--output-sarif",
+        help="Save scan report in SARIF 2.1.0 format for GitHub Code Scanning.",
     ),
 ):
     """Run zero-copy static security scan on a .safetensors model using Rust core."""
@@ -230,6 +237,10 @@ def scan_command(
             }, f, indent=2)
         console.print(f"[dim]Report saved to: {json_output}[/dim]")
 
+    if sarif_output:
+        export_scan_sarif(model_path, results, sarif_output)
+        console.print(f"[dim]SARIF 2.1.0 log saved to: {sarif_output}[/dim]")
+
 
 @app.command(name="fuzz")
 def fuzz_command(
@@ -260,6 +271,11 @@ def fuzz_command(
         "--output-json",
         "-o",
         help="Save full dynamic Trojan fuzzing report to a JSON file.",
+    ),
+    sarif_output: Optional[Path] = typer.Option(
+        None,
+        "--output-sarif",
+        help="Save dynamic Trojan fuzzing report in SARIF 2.1.0 format for GitHub Code Scanning.",
     ),
 ):
     """Run dynamic Trojan backdoor fuzzing on a PyTorch model."""
@@ -520,6 +536,10 @@ def fuzz_command(
         with open(json_output, "w") as f:
             json.dump(report_json, f, indent=2)
         console.print(f"[dim]Fuzzing report saved to: {json_output}[/dim]")
+
+    if sarif_output:
+        export_fuzz_sarif(model_path, report, sarif_output)
+        console.print(f"[dim]SARIF 2.1.0 log saved to: {sarif_output}[/dim]")
 
 
 @app.command(name="doctor")
