@@ -38,6 +38,9 @@ dependencies = [
 fuzzer = [
     "torch>=2.0.0",
 ]
+benchmark = [
+    "matplotlib>=3.5.0",
+]
 dev = [
     "pytest>=7.0.0",
     "maturin>=1.5.0",
