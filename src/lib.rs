@@ -295,7 +295,7 @@ mod tests {
         data.extend((0..=255u8).cycle().take(256));
         data.extend(vec![0u8; 1024]);
 
-        assert_eq!(shannon_entropy_chunked(&data, 1024), 8.0);
+        assert_eq!(shannon_entropy_chunked(&data, 256), 8.0);
         assert_eq!(shannon_entropy_chunked(&data, 0), 0.0);
         assert_eq!(shannon_entropy_chunked(&[], 1024), 0.0);
     }
