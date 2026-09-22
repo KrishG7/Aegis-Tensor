@@ -4,8 +4,9 @@ Hooks into PyTorch models using forward hooks, measuring intermediate layer
 activations under fuzzing to detect Sleeper Agent Trojan triggers via L_infinity norm spikes.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass, fields, field, is_dataclass
+from collections.abc import Mapping
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 import numpy as np
 
 try:
@@ -48,30 +49,61 @@ class TrojanScanReport:
 class ActivationHookManager:
     """Manages PyTorch forward hooks to record activation statistics."""
 
-    def __init__(self, model: Any):
+    def __init__(
+        self,
+        model: Any,
+        module_types: Optional[
+            Union[Type["nn.Module"], Tuple[Type["nn.Module"], ...]]
+        ] = None,
+    ):
         if not TORCH_AVAILABLE:
             raise RuntimeError("PyTorch is required for dynamic fuzzing. Install with `pip install torch`.")
         self.model = model
+        if isinstance(module_types, type):
+            module_types = (module_types,)
+        self.module_types = module_types
         self.hooks: List[Any] = []
         self.current_activations: Dict[str, LayerActivationStat] = {}
         self._register_hooks()
 
+    @staticmethod
+    def _find_tensor(output: Any) -> Optional[Any]:
+        """Find the first tensor in common PyTorch output containers."""
+        if torch.is_tensor(output):
+            return output
+        if isinstance(output, Mapping):
+            for value in output.values():
+                tensor = ActivationHookManager._find_tensor(value)
+                if tensor is not None:
+                    return tensor
+        elif isinstance(output, (tuple, list)):
+            for value in output:
+                tensor = ActivationHookManager._find_tensor(value)
+                if tensor is not None:
+                    return tensor
+        elif is_dataclass(output) and not isinstance(output, type):
+            for output_field in fields(output):
+                tensor = ActivationHookManager._find_tensor(
+                    getattr(output, output_field.name)
+                )
+                if tensor is not None:
+                    return tensor
+        elif hasattr(output, "last_hidden_state"):
+            return ActivationHookManager._find_tensor(output.last_hidden_state)
+        return None
+
     def _hook_fn(self, name: str) -> Callable:
         def hook(module: Any, input_tensors: Any, output_tensor: Any):
-            # Flatten or extract raw tensor if output is a tuple/dataclass
-            tensor = output_tensor
-            if isinstance(tensor, (tuple, list)):
-                tensor = tensor[0]
-            elif hasattr(tensor, "last_hidden_state"):
-                tensor = tensor.last_hidden_state
-
-            if hasattr(tensor, "detach") and hasattr(tensor, "abs"):
+            tensor = self._find_tensor(output_tensor)
+            if tensor is not None:
                 with torch.no_grad():
-                    detached = tensor.detach().float()
+                    detached = tensor.detach().float().cpu()
+                    if detached.numel() == 0:
+                        return
                     # L_infinity norm: max absolute activation
-                    l_inf = float(torch.max(torch.abs(detached)).cpu().item())
-                    mean_val = float(torch.mean(detached).cpu().item())
-                    std_val = float(torch.std(detached).cpu().item()) if detached.numel() > 1 else 0.0
+                    l_inf = float(torch.max(torch.abs(detached)).item())
+                    mean_val = float(torch.mean(detached).item())
+                    std_val = float(torch.std(detached).item()) if detached.numel() > 1 else 0.0
 
                     self.current_activations[name] = LayerActivationStat(
                         layer_name=name,
@@ -85,9 +117,13 @@ class ActivationHookManager:
     def _register_hooks(self):
         """Recursively registers hooks on named modules."""
         for name, module in self.model.named_modules():
-            # Hook non-container modules (layers that perform operations)
-            children = list(module.children())
-            if not children and len(list(module.parameters())) > 0:
+            if self.module_types is not None:
+                should_hook = isinstance(module, self.module_types)
+            else:
+                # Hook non-container modules (layers that perform operations)
+                children = list(module.children())
+                should_hook = not children and len(list(module.parameters())) > 0
+            if should_hook:
                 h = module.register_forward_hook(self._hook_fn(name))
                 self.hooks.append(h)
 
