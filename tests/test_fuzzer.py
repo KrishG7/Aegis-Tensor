@@ -1,6 +1,7 @@
 """Tests for Dynamic Fuzzing Engine in aegis/fuzzer.py."""
 
 import pytest
+from dataclasses import dataclass
 from aegis import TORCH_AVAILABLE, DynamicTrojanFuzzer, ActivationHookManager
 
 if TORCH_AVAILABLE:
@@ -55,3 +56,34 @@ def test_dynamic_trojan_fuzzer_clean_model():
     assert report.model_name == "SimpleLinearModel"
     assert report.num_fuzz_samples == 10
     assert not report.suspected_trojan
+
+
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch is not installed in the environment")
+def test_hook_manager_extracts_nested_outputs_and_filters_modules():
+    @dataclass
+    class ModelOutput:
+        last_hidden_state: torch.Tensor
+
+    class StructuredModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(3, 3)
+            self.relu = nn.ReLU()
+
+        def forward(self, x):
+            return {"nested": (ModelOutput(self.linear(x)),)}
+
+    model = StructuredModel()
+    hook_mgr = ActivationHookManager(model, module_types=nn.Linear)
+
+    try:
+        _ = model(torch.ones(2, 3, requires_grad=True))
+
+        assert list(hook_mgr.current_activations) == ["linear"]
+        assert hook_mgr.current_activations["linear"].l_inf_norm > 0
+    finally:
+        hook_mgr.remove()
+
+    assert hook_mgr.hooks == []
+    assert hook_mgr.current_activations == {}
+    hook_mgr.remove()
