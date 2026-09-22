@@ -176,3 +176,6 @@ def test_cli_fuzz_mocked_execution(tmp_path):
         assert data["spike_ratio"] == 6.0
         assert data["suspected_trojan"] is True
         assert "transformer.layer.2" in data["suspicious_layers"]
+        assert "iteration_reports" in data
+        assert data["iteration_reports"][0]["highest_layer"] == "transformer.layer.2"
+        assert data["iteration_reports"][0]["layer_stats"]["transformer.layer.2"]["l_inf_norm"] == 9.0
