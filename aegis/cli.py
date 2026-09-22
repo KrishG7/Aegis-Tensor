@@ -44,11 +44,12 @@ from aegis import (
 
 def get_risk_badge(level: str) -> str:
     """Return styled security risk badge for terminal display."""
-    if level == "CRITICAL":
+    normalized = str(level).upper()
+    if normalized == "CRITICAL":
         return "[bold white on red] [!] CRITICAL MALWARE [/bold white on red]"
-    elif level == "SUSPICIOUS":
+    elif normalized == "SUSPICIOUS":
         return "[bold black on yellow] [?] SUSPICIOUS ANOMALY [/bold black on yellow]"
-    elif level == "CLEAN":
+    elif normalized == "CLEAN":
         return "[bold white on green] [OK] CLEAN [/bold white on green]"
     return level
 
@@ -504,6 +505,24 @@ def fuzz_command(
 
     # 12. Optional JSON Telemetry Export
     if json_output:
+        iteration_report_payload = []
+        for iteration in report.iteration_reports:
+            iteration_report_payload.append({
+                "iteration": iteration.iteration,
+                "input_tag": iteration.input_tag,
+                "max_l_inf": iteration.max_l_inf,
+                "highest_layer": iteration.highest_layer,
+                "layer_stats": {
+                    layer_name: {
+                        "layer_name": stat.layer_name,
+                        "l_inf_norm": stat.l_inf_norm,
+                        "mean_activation": stat.mean_activation,
+                        "std_activation": stat.std_activation,
+                    }
+                    for layer_name, stat in iteration.layer_stats.items()
+                },
+            })
+
         report_json = {
             "model_path": str(model_path.resolve()),
             "model_name": report.model_name,
@@ -516,6 +535,7 @@ def fuzz_command(
             "suspicious_layers": report.suspicious_layers,
             "peak_layer": overall_peak_layer,
             "layer_peaks": layer_peaks,
+            "iteration_reports": iteration_report_payload,
         }
         with open(json_output, "w") as f:
             json.dump(report_json, f, indent=2)
