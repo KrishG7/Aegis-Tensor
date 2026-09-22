@@ -102,10 +102,10 @@ def scan_command(
         help="Shannon entropy threshold for flagging encrypted/compressed payloads (max 8.0).",
     ),
     benford_threshold: float = typer.Option(
-        0.04,
+        0.035,
         "--benford-threshold",
         "-b",
-        help="Benford's Law MAD threshold for flagging non-natural float distributions.",
+        help="Benford's Law MAD threshold for flagging anomalous non-natural float distributions.",
     ),
     json_output: Optional[Path] = typer.Option(
         None,

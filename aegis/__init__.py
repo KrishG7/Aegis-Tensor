@@ -11,6 +11,7 @@ try:
     from aegis.aegis_core import (  # type: ignore
         TensorScanResult,
         benford_law_mad,
+        benford_law_stats,
         mantissa_bit_plane_entropy,
         scan_safetensors,
         shannon_entropy_chunked,
@@ -27,6 +28,7 @@ except ImportError:
     shannon_entropy_bytes = None  # type: ignore
     mantissa_bit_plane_entropy = None  # type: ignore
     benford_law_mad = None  # type: ignore
+    benford_law_stats = None  # type: ignore
 
 # Dynamic Fuzzer imports
 from aegis.fuzzer import (
@@ -47,6 +49,7 @@ __all__ = [
     "shannon_entropy_chunked",
     "mantissa_bit_plane_entropy",
     "benford_law_mad",
+    "benford_law_stats",
     "DynamicTrojanFuzzer",
     "ActivationHookManager",
     "TrojanScanReport",

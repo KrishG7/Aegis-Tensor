@@ -87,7 +87,7 @@ To provide uniform and decisive threat signaling across all commands (`scan` and
 
 | Risk Tier | Badge Styling | Criteria in Static Scan | Criteria in Dynamic Fuzz |
 | :--- | :--- | :--- | :--- |
-| **CRITICAL MALWARE** | `[bold red]CRITICAL MALWARE[/bold red]` | Shannon Entropy $\ge 7.92$ AND Benford MAD $\ge 0.04$ | Spike Ratio $\ge 8.0$ OR Multiple layers spiked |
+| **CRITICAL MALWARE** | `[bold red]CRITICAL MALWARE[/bold red]` | Shannon Entropy $\ge 7.92$ AND Benford MAD $\ge 0.035$ | Spike Ratio $\ge 8.0$ OR Multiple layers spiked |
 | **SUSPICIOUS ANOMALY** | `[bold yellow]SUSPICIOUS ANOMALY[/bold yellow]` | Either Entropy or Benford exceeds threshold | Spike Ratio $\ge \tau_{\text{spike}}$ ($4.0$) |
 | **CLEAN** | `[bold green]CLEAN[/bold green]` | All tensors within natural thresholds | Spike Ratio $< \tau_{\text{spike}}$ across all layers |
 
