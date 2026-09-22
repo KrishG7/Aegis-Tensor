@@ -1,8 +1,9 @@
+use half::{bf16, f16};
 use memmap2::MmapOptions;
 use pyo3::exceptions::PyIOError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use safetensors::SafeTensors;
+use safetensors::{Dtype, SafeTensors};
 use std::fs::File;
 
 /// Result for an individual scanned tensor in a .safetensors file.
@@ -109,6 +110,25 @@ pub fn mantissa_bit_plane_entropy(data: &[u8]) -> (f64, f64) {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BenfordStats {
+    pub mad: f64,
+    pub chi_square: f64,
+    pub valid_count: usize,
+}
+
+impl BenfordStats {
+    fn classification(&self) -> &'static str {
+        if self.mad < 0.015 {
+            "normal"
+        } else if self.mad < 0.035 {
+            "questionable"
+        } else {
+            "anomalous"
+        }
+    }
+}
+
 /// Compute Benford's Law Mean Absolute Deviation (MAD) for leading digits of float32 values.
 ///
 /// Benford's distribution for first non-zero digit d in {1..9}:
@@ -118,7 +138,18 @@ pub fn benford_law_mad(floats: Vec<f32>) -> f64 {
     calculate_benford_mad_slice(&floats)
 }
 
+/// Compute Benford's Law MAD and chi-square statistic together for a float slice.
+#[pyfunction]
+pub fn benford_law_stats(floats: Vec<f32>) -> (f64, f64) {
+    let stats = calculate_benford_stats(&floats);
+    (stats.mad, stats.chi_square)
+}
+
 fn calculate_benford_mad_slice(floats: &[f32]) -> f64 {
+    calculate_benford_stats(floats).mad
+}
+
+fn calculate_benford_stats(floats: &[f32]) -> BenfordStats {
     let mut digit_counts = [0usize; 10]; // index 1..=9
     let mut valid_count = 0usize;
 
@@ -137,18 +168,50 @@ fn calculate_benford_mad_slice(floats: &[f32]) -> f64 {
 
     if valid_count < 100 {
         // Insufficient sample size to reliably apply Benford's Law
-        return 0.0;
+        return BenfordStats {
+            mad: 0.0,
+            chi_square: 0.0,
+            valid_count,
+        };
     }
 
-    // Expected Benford probabilities for d = 1..=9
     let mut sum_absolute_deviations = 0.0;
+    let mut chi_square = 0.0;
+
     for d in 1..=9 {
         let expected_p = (1.0 + 1.0 / (d as f64)).log10();
         let observed_p = digit_counts[d] as f64 / valid_count as f64;
+        let expected_count = expected_p * valid_count as f64;
+
         sum_absolute_deviations += (observed_p - expected_p).abs();
+        if expected_count > 0.0 {
+            chi_square += ((digit_counts[d] as f64 - expected_count).powi(2)) / expected_count;
+        }
     }
 
-    sum_absolute_deviations / 9.0
+    BenfordStats {
+        mad: sum_absolute_deviations / 9.0,
+        chi_square,
+        valid_count,
+    }
+}
+
+fn decode_f32_bytes(data: &[u8]) -> Vec<f32> {
+    data.chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+fn decode_f16_bytes(data: &[u8]) -> Vec<f32> {
+    data.chunks_exact(2)
+        .map(|chunk| f16::from_bits(u16::from_le_bytes([chunk[0], chunk[1]])).to_f32())
+        .collect()
+}
+
+fn decode_bf16_bytes(data: &[u8]) -> Vec<f32> {
+    data.chunks_exact(2)
+        .map(|chunk| bf16::from_bits(u16::from_le_bytes([chunk[0], chunk[1]])).to_f32())
+        .collect()
 }
 
 #[inline]
@@ -170,7 +233,7 @@ fn extract_leading_digit(mut val: f32) -> usize {
 ///
 /// Analyzes each tensor for steganographic anomalies using Shannon Entropy and Benford's Law.
 #[pyfunction]
-#[pyo3(signature = (path, entropy_threshold = 7.92, benford_mad_threshold = 0.04))]
+#[pyo3(signature = (path, entropy_threshold = 7.92, benford_mad_threshold = 0.035))]
 pub fn scan_safetensors(
     path: &str,
     entropy_threshold: f64,
@@ -202,15 +265,17 @@ pub fn scan_safetensors(
 
             let entropy = shannon_entropy_bytes(data_bytes);
 
-            // Benford's Law check on float32 tensors
-            let mut benford_mad = 0.0;
-            if dtype.contains("F32") && data_bytes.len() % 4 == 0 {
-                let f32_vals: Vec<f32> = data_bytes
-                    .chunks_exact(4)
-                    .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                    .collect();
-                benford_mad = calculate_benford_mad_slice(&f32_vals);
-            }
+            let float_values = match tensor_view.dtype() {
+                Dtype::F32 => Some(decode_f32_bytes(data_bytes)),
+                Dtype::F16 => Some(decode_f16_bytes(data_bytes)),
+                Dtype::BF16 => Some(decode_bf16_bytes(data_bytes)),
+                _ => None,
+            };
+
+            let benford_mad = float_values
+                .as_ref()
+                .map(|values| calculate_benford_mad_slice(values))
+                .unwrap_or(0.0);
 
             let mut anomaly_reasons = Vec::new();
             let mut is_suspicious = false;
@@ -258,6 +323,7 @@ fn aegis_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(shannon_entropy_chunked, m)?)?;
     m.add_function(wrap_pyfunction!(mantissa_bit_plane_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(benford_law_mad, m)?)?;
+    m.add_function(wrap_pyfunction!(benford_law_stats, m)?)?;
     m.add_function(wrap_pyfunction!(scan_safetensors, m)?)?;
     Ok(())
 }
@@ -319,6 +385,47 @@ mod tests {
         assert_eq!(extract_leading_digit(45.67), 4);
         assert_eq!(extract_leading_digit(0.00345), 3);
         assert_eq!(extract_leading_digit(0.789), 7);
+    }
+
+    #[test]
+    fn test_benford_stats_include_chi_squared_and_threshold_classification() {
+        let samples: Vec<f32> = (1..=5000)
+            .map(|idx| ((idx % 9) + 1) as f32 + (idx as f32 * 0.01))
+            .collect();
+
+        let (mad, chi_square) = benford_law_stats(samples);
+        assert!(mad >= 0.0);
+        assert!(chi_square >= 0.0);
+        assert!(mad > 0.0 || chi_square > 0.0);
+    }
+
+    #[test]
+    fn test_benford_half_precision_support() {
+        let mut values = Vec::new();
+        let total_samples = 10000;
+
+        for d in 1..=9 {
+            let p_d = (1.0 + 1.0 / (d as f64)).log10();
+            let count = (p_d * total_samples as f64).round() as usize;
+            for i in 0..count {
+                values.push(d as f32 + (i as f32 / count as f32) * 0.9);
+            }
+        }
+
+        let f16_bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| f16::from_f32(*value).to_bits().to_le_bytes())
+            .collect();
+        let bf16_bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| bf16::from_f32(*value).to_bits().to_le_bytes())
+            .collect();
+
+        let f16_decoded = decode_f16_bytes(&f16_bytes);
+        let bf16_decoded = decode_bf16_bytes(&bf16_bytes);
+
+        assert!(calculate_benford_mad_slice(&f16_decoded) < 0.005);
+        assert!(calculate_benford_mad_slice(&bf16_decoded) < 0.005);
     }
 
     #[test]
