@@ -64,6 +64,51 @@ pub fn shannon_entropy_bytes(data: &[u8]) -> f64 {
     entropy
 }
 
+/// Return the highest Shannon entropy found in any chunk of the input.
+///
+/// The final chunk may be shorter than `chunk_size`. Empty input and a zero
+/// chunk size return 0.0 rather than attempting an invalid partition.
+#[pyfunction]
+pub fn shannon_entropy_chunked(data: &[u8], chunk_size: usize) -> f64 {
+    if data.is_empty() || chunk_size == 0 {
+        return 0.0;
+    }
+
+    data.chunks(chunk_size)
+        .map(shannon_entropy_bytes)
+        .fold(0.0, f64::max)
+}
+
+fn mantissa_bit_plane_entropy_for(data: &[u8], bit: u32) -> f64 {
+    let float_count = data.len() / 4;
+    if float_count == 0 {
+        return 0.0;
+    }
+
+    let mut packed_bits = vec![0u8; float_count.div_ceil(8)];
+    for (index, chunk) in data.chunks_exact(4).enumerate() {
+        let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let mantissa_bit = ((word & 0x007F_FFFF) >> bit) & 1;
+        packed_bits[index / 8] |= (mantissa_bit as u8) << (index % 8);
+    }
+
+    shannon_entropy_bytes(&packed_bits)
+}
+
+/// Compute entropy for the two least-significant float32 mantissa bit planes.
+///
+/// Input is interpreted as little-endian float32 words. The returned tuple is
+/// `(bit_0_entropy, bit_1_entropy)`, with each plane packed into bytes before
+/// calculating Shannon entropy. Trailing bytes that do not form a full word
+/// are ignored.
+#[pyfunction]
+pub fn mantissa_bit_plane_entropy(data: &[u8]) -> (f64, f64) {
+    (
+        mantissa_bit_plane_entropy_for(data, 0),
+        mantissa_bit_plane_entropy_for(data, 1),
+    )
+}
+
 /// Compute Benford's Law Mean Absolute Deviation (MAD) for leading digits of float32 values.
 ///
 /// Benford's distribution for first non-zero digit d in {1..9}:
@@ -210,6 +255,8 @@ pub fn scan_safetensors(
 fn aegis_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TensorScanResult>()?;
     m.add_function(wrap_pyfunction!(shannon_entropy_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(shannon_entropy_chunked, m)?)?;
+    m.add_function(wrap_pyfunction!(mantissa_bit_plane_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(benford_law_mad, m)?)?;
     m.add_function(wrap_pyfunction!(scan_safetensors, m)?)?;
     Ok(())
@@ -240,6 +287,29 @@ mod tests {
         let entropy = shannon_entropy_bytes(&uniform);
         // Shannon entropy of uniform 256 values is exactly 8.0 bits
         assert!((entropy - 8.0).abs() < 1e-4, "Entropy was {}", entropy);
+    }
+
+    #[test]
+    fn test_chunked_entropy_detects_localized_payload() {
+        let mut data = vec![0u8; 1024];
+        data.extend((0..=255u8).cycle().take(256));
+        data.extend(vec![0u8; 1024]);
+
+        assert_eq!(shannon_entropy_chunked(&data, 256), 8.0);
+        assert_eq!(shannon_entropy_chunked(&data, 0), 0.0);
+        assert_eq!(shannon_entropy_chunked(&[], 1024), 0.0);
+    }
+
+    #[test]
+    fn test_mantissa_bit_plane_entropy_ignores_sign_and_exponent() {
+        let values = [1.0f32, -1.0, 2.0, -2.0, 4.0, -4.0, 8.0, -8.0];
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+
+        assert_eq!(mantissa_bit_plane_entropy(&bytes), (0.0, 0.0));
+        assert_eq!(mantissa_bit_plane_entropy(&[0u8; 3]), (0.0, 0.0));
     }
 
     #[test]
@@ -285,4 +355,3 @@ mod tests {
         assert!(mad > 0.03, "Expected MAD > 0.03, got {}", mad);
     }
 }
-
