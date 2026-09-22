@@ -4,7 +4,9 @@ import pytest
 import numpy as np
 from aegis import (
     CORE_AVAILABLE,
+    mantissa_bit_plane_entropy,
     shannon_entropy_bytes,
+    shannon_entropy_chunked,
     benford_law_mad,
 )
 
@@ -23,6 +25,23 @@ def test_shannon_entropy_zero_bytes():
     """Identical bytes should produce 0.0 entropy."""
     zero_bytes = bytes([0] * 10000)
     assert shannon_entropy_bytes(zero_bytes) == 0.0
+
+
+@pytest.mark.skipif(not CORE_AVAILABLE, reason="aegis_core Rust extension not compiled")
+def test_shannon_entropy_chunked_detects_localized_payload():
+    """Chunked entropy should expose a high-entropy region in low-entropy data."""
+    localized = bytes([0] * 1024) + bytes(range(256)) + bytes([0] * 1024)
+    assert shannon_entropy_chunked(localized, 256) == 8.0
+    assert shannon_entropy_chunked(localized, 0) == 0.0
+
+
+@pytest.mark.skipif(not CORE_AVAILABLE, reason="aegis_core Rust extension not compiled")
+def test_mantissa_bit_plane_entropy_ignores_sign_and_exponent():
+    """Only mantissa bits should affect the bit-plane entropy values."""
+    values = np.array([1.0, -1.0, 2.0, -2.0, 4.0, -4.0], dtype=np.float32)
+    bit_0_entropy, bit_1_entropy = mantissa_bit_plane_entropy(values.tobytes())
+    assert bit_0_entropy == 0.0
+    assert bit_1_entropy == 0.0
 
 
 @pytest.mark.skipif(not CORE_AVAILABLE, reason="aegis_core Rust extension not compiled")
