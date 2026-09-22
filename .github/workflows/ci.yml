@@ -8,32 +8,44 @@ on:
 
 jobs:
   rust-check:
-    name: Rust Check & Unit Tests
-    runs-on: ubuntu-latest
+    name: Rust Check & Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
       - name: Cargo Check
         run: cargo check --verbose
       - name: Cargo Unit Tests (Zero entropy, Benford MAD, digit extraction)
         run: cargo test --no-default-features --verbose
 
   python-check:
-    name: Python Build & Integration Tests
-    runs-on: ubuntu-latest
+    name: Python Test Matrix (${{ matrix.os }} - Py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    needs: rust-check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.14-dev"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental || false }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
       - name: Create virtual environment and install dependencies
         run: |
           python -m venv venv
@@ -44,8 +56,39 @@ jobs:
         run: |
           source venv/bin/activate
           maturin develop
-      - name: Run Test Suite (CLI, Entropy, Fuzzer)
+      - name: Run Test Suite (CLI, Entropy, Fuzzer, SARIF Reporting)
         run: |
           source venv/bin/activate
           pytest -v tests/
+      - name: Verify SARIF 2.1.0 Exporter Contract
+        run: |
+          source venv/bin/activate
+          python -c "import json; from aegis.reporting import SarifReportBuilder; doc = SarifReportBuilder().build(); assert doc['version'] == '2.1.0'; print('SARIF 2.1.0 export contract verified!')"
 
+  wheel-package:
+    name: Build Distributable Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: python-check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build Native Wheel via maturin-action
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+          if-no-files-found: error

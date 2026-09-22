@@ -67,3 +67,11 @@ htmlcov/
 *.h5
 *.ckpt
 !tests/fixtures/*.safetensors
+
+# Benchmark & test artifacts
+benchmarks/temp_models/
+*.sarif
+benchmark_metrics.csv
+benchmark_metrics.json
+benchmark_summary.png
+*.png

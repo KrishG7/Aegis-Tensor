@@ -40,6 +40,12 @@ from aegis import (
     TORCH_AVAILABLE,
     scan_safetensors,
     DynamicTrojanFuzzer,
+    export_scan_sarif,
+    export_fuzz_sarif,
+    parse_hf_uri,
+    inspect_hf_header,
+    download_hf_model,
+    HuggingFaceInspectorError,
 )
 
 def get_risk_badge(level: str) -> str:
@@ -93,7 +99,11 @@ def main(
 
 @app.command(name="scan")
 def scan_command(
-    model_path: Path = typer.Argument(..., help="Path to the .safetensors model file to scan."),
+    model_target: str = typer.Argument(
+        ...,
+        metavar="MODEL_PATH_OR_URI",
+        help="Path to local .safetensors file or remote Hugging Face URI (e.g. 'hf://username/repo').",
+    ),
     entropy_threshold: float = typer.Option(
         7.92,
         "--entropy-threshold",
@@ -112,13 +122,117 @@ def scan_command(
         "-o",
         help="Save full scan report to a JSON file.",
     ),
+    sarif_output: Optional[Path] = typer.Option(
+        None,
+        "--output-sarif",
+        help="Save scan report in SARIF 2.1.0 format for GitHub Code Scanning.",
+    ),
+    download: bool = typer.Option(
+        False,
+        "--download",
+        "-d",
+        help="Download remote Hugging Face model to local cache for full static cryptanalysis scan.",
+    ),
 ):
     """Run zero-copy static security scan on a .safetensors model using Rust core."""
     print_banner()
 
-    if not model_path.exists():
-        console.print(f"[bold red]Error:[/bold red] Model file not found at: {model_path}")
-        raise typer.Exit(code=1)
+    # Check if target is a remote Hugging Face URI
+    if model_target.startswith("hf://"):
+        try:
+            repo_id, filename, revision = parse_hf_uri(model_target)
+        except (ValueError, HuggingFaceInspectorError) as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            raise typer.Exit(code=1)
+
+        resolved_file = filename or "model.safetensors"
+        resolved_rev = revision or "main"
+
+        if not download:
+            # Fast remote header inspection via HTTP Range Requests
+            console.print(f"[bold cyan]Connecting to Hugging Face Hub:[/bold cyan] {repo_id} ({resolved_file})")
+            with console.status("[bold green]Fetching remote safetensors header via HTTP Range Requests...[/bold green]"):
+                try:
+                    header_info = inspect_hf_header(repo_id, resolved_file, revision=resolved_rev)
+                except Exception as e:
+                    console.print(f"[bold red]Remote inspection failed:[/bold red] {e}")
+                    raise typer.Exit(code=1)
+
+            num_t = header_info.get("num_tensors", header_info.get("tensor_count", 0))
+            tensors_dict = header_info.get("tensors", header_info.get("header", {}))
+
+            table = Table(
+                title=f"Hugging Face Remote Header: {repo_id} ({num_t} Tensors)",
+                box=box.ROUNDED,
+                header_style="bold magenta",
+            )
+            table.add_column("Tensor Name", style="cyan", overflow="ellipsis")
+            table.add_column("Dtype", justify="center")
+            table.add_column("Shape", justify="center")
+            table.add_column("Data Offsets (Bytes)", justify="right")
+
+            for t_name, t_info in list(tensors_dict.items())[:25]:
+                table.add_row(
+                    t_name,
+                    t_info.get("dtype", "Unknown"),
+                    str(t_info.get("shape", [])),
+                    str(t_info.get("data_offsets", [])),
+                )
+
+            console.print(table)
+            if num_t > 25:
+                console.print(f"[dim]... and {num_t - 25} more tensors.[/dim]\n")
+
+            console.print(
+                Panel(
+                    f"[bold green]Remote Header Verified:[/bold green] {num_t} tensor descriptors extracted without downloading weight payloads.\n"
+                    f"Header Size: [cyan]{header_info['header_size_bytes']:,} bytes[/cyan].\n\n"
+                    f"[bold yellow]To run full zero-copy static cryptanalysis (Shannon entropy & Benford's Law) on tensor weights, re-run with:[/bold yellow]\n"
+                    f"  [bold green]aegis scan {model_target} --download[/bold green]",
+                    title="Hugging Face Remote Inspection",
+                    border_style="cyan",
+                )
+            )
+
+            if json_output:
+                with open(json_output, "w") as f:
+                    json.dump(header_info, f, indent=2)
+                console.print(f"[dim]Remote header report saved to: {json_output}[/dim]")
+            return
+
+        # Full download requested for deep cryptanalysis scan
+        console.print(f"[bold cyan]Downloading remote Hugging Face model:[/bold cyan] {repo_id} ({resolved_file})")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[green]Downloading model...", total=100)
+
+            def dl_cb(downloaded: int, total: int):
+                if total > 0:
+                    progress.update(task, completed=int((downloaded / total) * 100))
+
+            try:
+                model_path = download_hf_model(
+                    repo_id,
+                    resolved_file,
+                    revision=resolved_rev,
+                    progress_callback=dl_cb,
+                )
+            except Exception as e:
+                console.print(f"[bold red]Download failed:[/bold red] {e}")
+                raise typer.Exit(code=1)
+
+        console.print(f"[green]Download completed. Cached at:[/green] {model_path}\n")
+    else:
+        model_path = Path(model_target)
+        if not model_path.exists():
+            console.print(f"[bold red]Error:[/bold red] Model file not found at: {model_path}")
+            raise typer.Exit(code=1)
 
     if not CORE_AVAILABLE or scan_safetensors is None:
         console.print(
@@ -230,6 +344,10 @@ def scan_command(
             }, f, indent=2)
         console.print(f"[dim]Report saved to: {json_output}[/dim]")
 
+    if sarif_output:
+        export_scan_sarif(model_path, results, sarif_output)
+        console.print(f"[dim]SARIF 2.1.0 log saved to: {sarif_output}[/dim]")
+
 
 @app.command(name="fuzz")
 def fuzz_command(
@@ -260,6 +378,11 @@ def fuzz_command(
         "--output-json",
         "-o",
         help="Save full dynamic Trojan fuzzing report to a JSON file.",
+    ),
+    sarif_output: Optional[Path] = typer.Option(
+        None,
+        "--output-sarif",
+        help="Save dynamic Trojan fuzzing report in SARIF 2.1.0 format for GitHub Code Scanning.",
     ),
 ):
     """Run dynamic Trojan backdoor fuzzing on a PyTorch model."""
@@ -520,6 +643,10 @@ def fuzz_command(
         with open(json_output, "w") as f:
             json.dump(report_json, f, indent=2)
         console.print(f"[dim]Fuzzing report saved to: {json_output}[/dim]")
+
+    if sarif_output:
+        export_fuzz_sarif(model_path, report, sarif_output)
+        console.print(f"[dim]SARIF 2.1.0 log saved to: {sarif_output}[/dim]")
 
 
 @app.command(name="doctor")

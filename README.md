@@ -93,12 +93,22 @@ Scan any `.safetensors` weights file for embedded malware payloads and statistic
 aegis scan /path/to/model.safetensors
 ```
 
-Customize sensitivity thresholds:
+Customize sensitivity thresholds and export SARIF/JSON logs:
 ```bash
 aegis scan /path/to/model.safetensors \
   --entropy-threshold 7.90 \
   --benford-threshold 0.035 \
-  --output-json report.json
+  --output-json report.json \
+  --output-sarif report.sarif
+```
+
+### Dynamic Trojan Fuzzing (CLI)
+Run perturbation fuzzing on PyTorch models to detect Sleeper Agent Trojan activation spikes:
+```bash
+aegis fuzz /path/to/model.pt \
+  --iterations 50 \
+  --spike-threshold 4.0 \
+  --output-sarif fuzz_report.sarif
 ```
 
 ### Dynamic Trojan Fuzzing (Python API)
@@ -124,6 +134,42 @@ print(f"Max activation spike ratio: {report.spike_ratio:.2f}x")
 print(f"Suspicious layers: {report.suspicious_layers}")
 ```
 
+### Remote Hugging Face Hub Model Inspection
+Inspect remote `.safetensors` headers directly on Hugging Face Hub without downloading gigabytes of weight payloads via HTTP Range Requests:
+```bash
+# Instant zero-download remote header inspection
+aegis scan hf://google/gemma-2b
+
+# Specify exact file and branch revision
+aegis scan hf://mistralai/Mistral-7B-v0.1/model.safetensors@main
+
+# Download remote model to quarantine cache and execute full static cryptanalysis
+aegis scan hf://google/gemma-2b --download --output-sarif hf_report.sarif
+```
+
+### ⚡ Empirical Performance & Detection Benchmark Suite
+Run the standardized evaluation suite to benchmark scanning throughput ($GB/s$), latency ($ms/\text{tensor}$), zero-copy peak memory verification ($< 250\text{ MB RSS}$), and formal classification metrics (Confusion Matrix, TPR, FPR, Precision, F1):
+```bash
+# Fast evaluation on 100M-parameter profile
+python benchmarks/run_benchmark.py --quick
+
+# Full multi-scale evaluation (100M, 1B, 7B) with CSV and JSON exports
+python benchmarks/run_benchmark.py --iterations 5 --output-csv benchmark_metrics.csv --output-json benchmark_metrics.json
+```
+
+### 🛡️ Enterprise CI/CD & SARIF 2.1.0 Integration
+Aegis-Tensor outputs compliant **SARIF (Static Analysis Results Interchange Format) 2.1.0** logs ready for direct ingestion into GitHub Advanced Security Code Scanning:
+```yaml
+# In your GitHub Actions workflow:
+- name: Run Aegis Security Scan
+  run: aegis scan models/weights.safetensors --output-sarif results.sarif
+
+- name: Upload SARIF to GitHub Code Scanning
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
 ---
 
 ## 📚 Project Documentation
@@ -131,6 +177,8 @@ print(f"Suspicious layers: {report.suspicious_layers}")
 - [System Requirements & Threat Model](docs/REQUIREMENTS.md)
 - [Technology Stack Specification](docs/TECH_STACK.md)
 - [Deep Architectural & Mathematical Specification](docs/ARCHITECTURE.md)
+- [Engineering Design: Issue #7 (CLI & Terminal UX)](docs/ISSUE_7_ENGINEERING_DESIGN.md)
+- [Engineering Design: Issue #8 (SARIF 2.1.0 & CI/CD Pipeline)](docs/ISSUE_8_ENGINEERING_DESIGN.md)
 - [Development Roadmap & Milestones](docs/PHASES.md)
 - [Team Roles & Task Allocation](docs/TEAM_ALLOCATION.md)
 
