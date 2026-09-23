@@ -209,3 +209,102 @@ def test_custom_generator_still_requires_baseline():
     fuzzer = DynamicTrojanFuzzer(SimpleLinearModel())
     with pytest.raises(ValueError):
         fuzzer.run_fuzzing(sample_inputs_generator=lambda i: torch.randn(2, 10))
+
+
+# ---------------------------------------------------------------------------
+# Issue #5: multi-sample clean calibration and sub-network isolation
+# ---------------------------------------------------------------------------
+
+if TORCH_AVAILABLE:
+    from aegis import classify_module_region
+
+    class BackdoorNet(nn.Module):
+        """Surge is injected after layer1, so it first shows up at layer2."""
+
+        def __init__(self):
+            super().__init__()
+            self.layer1 = nn.Linear(8, 16)
+            self.layer2 = nn.Linear(16, 4)
+
+        def forward(self, x):
+            h = torch.relu(self.layer1(x))
+            if (x > 5.0).any():
+                h = h * 25.0
+            return self.layer2(h)
+
+    class TinyBlock(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = nn.MultiheadAttention(8, 2, batch_first=True)
+            self.norm = nn.LayerNorm(8)
+            self.mlp = nn.Sequential(nn.Linear(8, 16), nn.Linear(16, 8))
+
+    class TinyTransformer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed = nn.Embedding(20, 8)
+            self.block = TinyBlock()
+            self.classifier = nn.Linear(8, 3)
+
+
+@needs_torch
+def test_calibration_prevents_false_alarm_on_benign_noise():
+    """Old behaviour: zeros baseline made ordinary randn inputs look like spikes."""
+    torch.manual_seed(0)
+    fuzzer = DynamicTrojanFuzzer(BackdoorNet(), spike_threshold=4.0)
+    report = fuzzer.run_fuzzing(
+        sample_inputs_generator=lambda i: torch.randn(2, 8),
+        baseline_input=torch.zeros(2, 8),
+        num_iterations=15,
+        seed=0,
+    )
+    assert not report.suspected_trojan
+    assert report.layer_anomalies == []
+    # baseline_input + 16 noisy calibration samples
+    assert report.baseline_stats["layer1"].num_samples == 17
+    assert report.baseline_stats["layer1"].std_l_inf > 0
+
+
+@needs_torch
+def test_isolation_localizes_trigger_layer_and_input():
+    torch.manual_seed(0)
+    fuzzer = DynamicTrojanFuzzer(BackdoorNet(), spike_threshold=4.0)
+    report = fuzzer.run_fuzzing(
+        sample_inputs_generator=lambda i: torch.full((2, 8), 10.0 if i == 5 else 0.5),
+        baseline_input=torch.zeros(2, 8),
+        num_iterations=10,
+        seed=0,
+    )
+    assert report.suspected_trojan
+    top = report.layer_anomalies[0]            # sorted strongest first
+    assert top.layer_name == "layer2"
+    assert top.region == "head" and top.depth == "late"
+    assert top.trigger_iteration == 6          # i == 5 -> iteration 6
+    assert top.spike_ratio >= 4.0 and top.z_score > 3.0
+    assert "layer2" in report.anomaly_regions["head"]
+    assert report.spike_ratio == top.spike_ratio
+
+
+@needs_torch
+def test_explicit_calibration_inputs_are_used():
+    fuzzer = DynamicTrojanFuzzer(SimpleLinearModel())
+    cal = [torch.randn(2, 10) for _ in range(5)]
+    report = fuzzer.run_fuzzing(
+        sample_inputs_generator=lambda i: torch.randn(2, 10),
+        baseline_input=torch.zeros(2, 10),
+        num_iterations=3,
+        calibration_inputs=cal,
+    )
+    assert report.baseline_stats["fc1"].num_samples == 6
+
+
+@needs_torch
+def test_classify_module_region():
+    model = TinyTransformer()
+    modules = dict(model.named_modules())
+    assert classify_module_region("block.attn", modules["block.attn"]) == "attention"
+    assert classify_module_region("block.mlp.0", modules["block.mlp.0"]) == "mlp"
+    assert classify_module_region("block.norm", modules["block.norm"]) == "norm"
+    assert classify_module_region("embed", modules["embed"]) == "embedding"
+    assert classify_module_region("classifier", modules["classifier"]) == "head"
+    assert classify_module_region("block.mlp.1", modules["block.mlp.1"], is_last=True) == "head"
