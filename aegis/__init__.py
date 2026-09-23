@@ -37,6 +37,11 @@ from aegis.fuzzer import (
     TrojanScanReport,
     LayerActivationStat,
     TORCH_AVAILABLE,
+    generate_gaussian_noise,
+    generate_boundary_inputs,
+    generate_patch_triggers,
+    generate_token_perturbations,
+    build_auto_fuzz_suite,
 )
 
 __all__ = [
@@ -54,4 +59,9 @@ __all__ = [
     "ActivationHookManager",
     "TrojanScanReport",
     "LayerActivationStat",
+    "generate_gaussian_noise",
+    "generate_boundary_inputs",
+    "generate_patch_triggers",
+    "generate_token_perturbations",
+    "build_auto_fuzz_suite",
 ]

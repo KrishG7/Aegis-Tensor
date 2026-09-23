@@ -87,3 +87,125 @@ def test_hook_manager_extracts_nested_outputs_and_filters_modules():
     assert hook_mgr.hooks == []
     assert hook_mgr.current_activations == {}
     hook_mgr.remove()
+
+
+# ---------------------------------------------------------------------------
+# Issue #6: input perturbation generators and automated fuzzing mode
+# ---------------------------------------------------------------------------
+
+if TORCH_AVAILABLE:
+    from aegis import (
+        build_auto_fuzz_suite,
+        generate_boundary_inputs,
+        generate_gaussian_noise,
+        generate_patch_triggers,
+        generate_token_perturbations,
+    )
+
+    class TrojanModel(nn.Module):
+        """Linear model with an artificial sleeper backdoor on feature 0."""
+
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(10, 20)
+            self.fc2 = nn.Linear(20, 2)
+
+        def forward(self, x):
+            h = self.fc1(x)
+            if (x[:, 0] > 8.0).any():
+                h = h * 50.0
+            return self.fc2(h)
+
+    class TinyTokenModel(nn.Module):
+        def __init__(self, vocab_size=100):
+            super().__init__()
+            self.emb = nn.Embedding(vocab_size, 16)
+            self.fc = nn.Linear(16, 4)
+
+        def forward(self, ids):
+            return self.fc(self.emb(ids))
+
+
+needs_torch = pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch is not installed in the environment")
+
+
+@needs_torch
+def test_gaussian_noise_shape_and_scale():
+    gen = torch.Generator().manual_seed(0)
+    x = generate_gaussian_noise((4, 1000), sigma=5.0, generator=gen)
+    assert x.shape == (4, 1000)
+    assert 4.0 < x.std().item() < 6.0
+    with pytest.raises(ValueError):
+        generate_gaussian_noise((2, 2), sigma=-1.0)
+
+
+@needs_torch
+def test_boundary_inputs_cover_extremes_and_impulses():
+    cases = dict(generate_boundary_inputs((2, 10), magnitude=10.0, num_impulses=3))
+    assert torch.all(cases["boundary_zeros"] == 0)
+    assert torch.all(cases["boundary_pos_10"] == 10.0)
+    assert torch.all(cases["boundary_neg_10"] == -10.0)
+    delta = cases["boundary_delta_0"]
+    assert torch.all(delta[:, 0] == 10.0) and delta[:, 1:].abs().sum() == 0
+
+
+@needs_torch
+def test_patch_triggers_stamp_checkerboard():
+    cases = generate_patch_triggers((1, 3, 32, 32), patch_size=(8, 8), intensity=1.0)
+    tags = [t for t, _ in cases]
+    assert tags == ["patch_bottom_right_8x8", "patch_top_left_8x8", "patch_center_8x8"]
+    x = dict(cases)["patch_bottom_right_8x8"]
+    patch = x[0, 0, 24:, 24:]
+    assert patch.abs().min() == 1.0          # every pixel in the patch is set
+    assert patch[0, 0] == -patch[0, 1]       # alternating contrast
+    assert x[0, 0, :24, :].abs().sum() == 0  # rest of the image untouched
+    with pytest.raises(ValueError):
+        generate_patch_triggers((10,))
+
+
+@needs_torch
+def test_token_perturbations_valid_ids():
+    cases = generate_token_perturbations(vocab_size=50, seq_len=12, batch_size=2)
+    for tag, ids in cases:
+        assert ids.dtype == torch.long, tag
+        assert ids.shape == (2, 12), tag
+        assert ids.min() >= 0 and ids.max() < 50, tag
+    repeat = dict(cases)["token_repeat_max_id"]
+    assert torch.all(repeat == 49)
+
+
+@needs_torch
+def test_auto_suite_interleaves_strategies():
+    suite = build_auto_fuzz_suite(input_shape=(1, 3, 16, 16), seed=0)
+    first_three = [tag.split("_")[0] for tag, _ in suite[:3]]
+    assert first_three == ["gaussian", "boundary", "patch"]
+    with pytest.raises(ValueError):
+        build_auto_fuzz_suite()
+
+
+@needs_torch
+def test_auto_mode_uncovers_trojan_without_custom_generator():
+    torch.manual_seed(0)
+    fuzzer = DynamicTrojanFuzzer(TrojanModel(), spike_threshold=4.0)
+    report = fuzzer.run_fuzzing(input_shape=(2, 10), num_iterations=12, seed=0)
+
+    assert report.suspected_trojan
+    assert "fc1" in report.suspicious_layers
+    tags = {r.input_tag for r in report.iteration_reports}
+    assert any(t.startswith("gaussian_") for t in tags)
+    assert any(t.startswith("boundary_") for t in tags)
+
+
+@needs_torch
+def test_auto_mode_token_model_runs():
+    fuzzer = DynamicTrojanFuzzer(TinyTokenModel(vocab_size=100))
+    report = fuzzer.run_fuzzing(vocab_size=100, seq_len=8, num_iterations=5, seed=1)
+    assert report.num_fuzz_samples == 5
+    assert all(r.input_tag.startswith("token_") for r in report.iteration_reports)
+
+
+@needs_torch
+def test_custom_generator_still_requires_baseline():
+    fuzzer = DynamicTrojanFuzzer(SimpleLinearModel())
+    with pytest.raises(ValueError):
+        fuzzer.run_fuzzing(sample_inputs_generator=lambda i: torch.randn(2, 10))

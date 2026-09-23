@@ -46,6 +46,172 @@ class TrojanScanReport:
     iteration_reports: List[FuzzIterationReport] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Input perturbation generators (Issue #6)
+# ---------------------------------------------------------------------------
+
+FuzzCase = Tuple[str, Any]  # (input_tag, input_tensor)
+
+
+def _require_torch() -> None:
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("PyTorch is required for dynamic fuzzing. Install with `pip install torch`.")
+
+
+def generate_gaussian_noise(
+    shape: Tuple[int, ...],
+    sigma: float = 1.0,
+    generator: Optional["torch.Generator"] = None,
+) -> "torch.Tensor":
+    """Zero-mean Gaussian noise with standard deviation ``sigma``.
+
+    Sweeping ``sigma`` across a wide range probes activation behaviour far
+    outside the benign input distribution.
+    """
+    _require_torch()
+    if sigma < 0:
+        raise ValueError("sigma must be non-negative")
+    return torch.randn(tuple(shape), generator=generator) * sigma
+
+
+def generate_boundary_inputs(
+    shape: Tuple[int, ...],
+    magnitude: float = 10.0,
+    num_impulses: int = 3,
+) -> List[FuzzCase]:
+    """Extreme-value inputs: all zeros, saturated +/-magnitude and sparse delta impulses.
+
+    A delta impulse sets a single feature to ``magnitude`` and everything else
+    to zero, isolating triggers keyed on one input position.
+    """
+    _require_torch()
+    shape = tuple(shape)
+    cases: List[FuzzCase] = [
+        ("boundary_zeros", torch.zeros(shape)),
+        (f"boundary_pos_{magnitude:g}", torch.full(shape, float(magnitude))),
+        (f"boundary_neg_{magnitude:g}", torch.full(shape, -float(magnitude))),
+    ]
+
+    per_sample = int(np.prod(shape[1:])) if len(shape) > 1 else int(np.prod(shape))
+    if per_sample > 0 and num_impulses > 0:
+        # Spread impulses evenly: first, middle and last features, etc.
+        positions = sorted({int(p) for p in np.linspace(0, per_sample - 1, num_impulses)})
+        for pos in positions:
+            x = torch.zeros(shape)
+            if len(shape) > 1:
+                x.view(shape[0], -1)[:, pos] = float(magnitude)
+            else:
+                x.view(-1)[pos] = float(magnitude)
+            cases.append((f"boundary_delta_{pos}", x))
+    return cases
+
+
+def generate_patch_triggers(
+    shape: Tuple[int, ...],
+    patch_size: Tuple[int, int] = (8, 8),
+    intensity: float = 1.0,
+    positions: Tuple[str, ...] = ("bottom_right", "top_left", "center"),
+    base_input: Optional["torch.Tensor"] = None,
+) -> List[FuzzCase]:
+    """BadNets-style triggers: a high-contrast checkerboard patch stamped on an image.
+
+    The patch is written to the last two (spatial) dimensions, so ``shape`` is
+    expected to look like (N, C, H, W), (C, H, W) or (H, W).
+    """
+    _require_torch()
+    shape = tuple(shape)
+    if len(shape) < 2:
+        raise ValueError("Patch triggers need at least 2 spatial dimensions (H, W)")
+
+    height, width = shape[-2], shape[-1]
+    ph, pw = min(patch_size[0], height), min(patch_size[1], width)
+    # Checkerboard of +intensity / -intensity (maximum local contrast)
+    rows = torch.arange(ph).unsqueeze(1)
+    cols = torch.arange(pw).unsqueeze(0)
+    patch = torch.where((rows + cols) % 2 == 0, float(intensity), -float(intensity))
+
+    anchors = {
+        "top_left": (0, 0),
+        "top_right": (0, width - pw),
+        "bottom_left": (height - ph, 0),
+        "bottom_right": (height - ph, width - pw),
+        "center": ((height - ph) // 2, (width - pw) // 2),
+    }
+    cases: List[FuzzCase] = []
+    for pos in positions:
+        if pos not in anchors:
+            raise ValueError(f"Unknown patch position '{pos}'. Choose from {sorted(anchors)}")
+        top, left = anchors[pos]
+        x = base_input.clone().float() if base_input is not None else torch.zeros(shape)
+        x[..., top:top + ph, left:left + pw] = patch
+        cases.append((f"patch_{pos}_{ph}x{pw}", x))
+    return cases
+
+
+def generate_token_perturbations(
+    vocab_size: int,
+    seq_len: int,
+    batch_size: int = 1,
+    generator: Optional["torch.Generator"] = None,
+) -> List[FuzzCase]:
+    """Token-ID perturbations for language models.
+
+    Covers extreme repetition of a single token, alternating token pairs,
+    vocabulary boundary IDs and rarely used tail-of-vocabulary tokens.
+    """
+    _require_torch()
+    if vocab_size < 2 or seq_len < 1:
+        raise ValueError("vocab_size must be >= 2 and seq_len >= 1")
+    shape = (batch_size, seq_len)
+    rand_tok = int(torch.randint(0, vocab_size, (1,), generator=generator).item())
+    tail_start = max(0, int(vocab_size * 0.95))  # last 5% of the vocabulary
+
+    alternating = torch.tensor([rand_tok, vocab_size - 1]).repeat(seq_len // 2 + 1)[:seq_len]
+    return [
+        (f"token_repeat_{rand_tok}", torch.full(shape, rand_tok, dtype=torch.long)),
+        ("token_repeat_min_id", torch.zeros(shape, dtype=torch.long)),
+        ("token_repeat_max_id", torch.full(shape, vocab_size - 1, dtype=torch.long)),
+        ("token_alternating", alternating.unsqueeze(0).repeat(batch_size, 1)),
+        ("token_vocab_tail", torch.randint(tail_start, vocab_size, shape, generator=generator)),
+    ]
+
+
+def build_auto_fuzz_suite(
+    input_shape: Optional[Tuple[int, ...]] = None,
+    vocab_size: Optional[int] = None,
+    seq_len: Optional[int] = None,
+    sigmas: Tuple[float, ...] = (0.5, 1.0, 2.0, 5.0, 10.0),
+    patch_size: Tuple[int, int] = (8, 8),
+    seed: Optional[int] = None,
+) -> List[FuzzCase]:
+    """Build the default fuzzing suite and interleave strategies round-robin.
+
+    Interleaving means even a short run touches every strategy
+    (noise, boundary, patch, token) instead of exhausting one first.
+    """
+    _require_torch()
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    groups: List[List[FuzzCase]] = []
+
+    if vocab_size is not None:
+        groups.append(generate_token_perturbations(vocab_size, seq_len or 32, generator=gen))
+    elif input_shape is not None:
+        shape = tuple(input_shape)
+        groups.append([(f"gaussian_sigma_{s:g}", generate_gaussian_noise(shape, s, gen)) for s in sigmas])
+        groups.append(generate_boundary_inputs(shape))
+        if len(shape) >= 3:  # image-like: (N, C, H, W) or (N, H, W)
+            groups.append(generate_patch_triggers(shape, patch_size))
+    else:
+        raise ValueError("Automated fuzzing needs either input_shape or vocab_size")
+
+    suite: List[FuzzCase] = []
+    for i in range(max(len(g) for g in groups)):
+        for g in groups:
+            if i < len(g):
+                suite.append(g[i])
+    return suite
+
+
 class ActivationHookManager:
     """Manages PyTorch forward hooks to record activation statistics."""
 
@@ -155,12 +321,37 @@ class DynamicTrojanFuzzer:
 
     def run_fuzzing(
         self,
-        sample_inputs_generator: Callable[[int], Any],
-        baseline_input: Any,
+        sample_inputs_generator: Optional[Callable[[int], Any]] = None,
+        baseline_input: Any = None,
         num_iterations: int = 50,
         progress_callback: Optional[Callable[[int, int, str, float], None]] = None,
+        input_shape: Optional[Tuple[int, ...]] = None,
+        vocab_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        seed: Optional[int] = None,
     ) -> TrojanScanReport:
-        """Run fuzzing over generated sample inputs and compare against baseline activations."""
+        """Run fuzzing over generated sample inputs and compare against baseline activations.
+
+        Manual mode: pass ``sample_inputs_generator`` and ``baseline_input``.
+        Automated mode: leave ``sample_inputs_generator`` as None and pass
+        ``input_shape`` (float models) or ``vocab_size`` (token models). The
+        built-in suite (Gaussian noise, boundary values, patch triggers or
+        token perturbations) is cycled for ``num_iterations`` steps.
+        """
+        auto_suite: Optional[List[FuzzCase]] = None
+        if sample_inputs_generator is None:
+            auto_suite = build_auto_fuzz_suite(
+                input_shape=input_shape, vocab_size=vocab_size, seq_len=seq_len, seed=seed
+            )
+            if baseline_input is None:
+                gen = torch.Generator().manual_seed(seed) if seed is not None else None
+                if vocab_size is not None:
+                    baseline_input = torch.randint(0, vocab_size, (1, seq_len or 32), generator=gen)
+                else:
+                    baseline_input = torch.randn(tuple(input_shape), generator=gen)
+        elif baseline_input is None:
+            raise ValueError("baseline_input is required when a custom sample_inputs_generator is given")
+
         hook_mgr = ActivationHookManager(self.model)
 
         try:
@@ -178,7 +369,10 @@ class DynamicTrojanFuzzer:
 
             # 2. Dynamic fuzzing loop
             for i in range(num_iterations):
-                test_input = sample_inputs_generator(i)
+                if auto_suite is not None:
+                    input_tag, test_input = auto_suite[i % len(auto_suite)]
+                else:
+                    input_tag, test_input = f"fuzz_step_{i + 1}", sample_inputs_generator(i)
                 hook_mgr.clear()
 
                 with torch.no_grad():
@@ -209,7 +403,7 @@ class DynamicTrojanFuzzer:
                 iteration_reports.append(
                     FuzzIterationReport(
                         iteration=i + 1,
-                        input_tag=f"fuzz_step_{i + 1}",
+                        input_tag=input_tag,
                         layer_stats=layer_stats,
                         max_l_inf=iter_max,
                         highest_layer=iter_top_layer,
