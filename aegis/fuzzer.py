@@ -35,6 +35,32 @@ class FuzzIterationReport:
 
 
 @dataclass
+class LayerBaselineStat:
+    """Clean-calibration statistics of a layer's L_inf norm."""
+    layer_name: str
+    max_l_inf: float
+    mean_l_inf: float
+    std_l_inf: float
+    num_samples: int
+
+
+@dataclass
+class LayerAnomaly:
+    """A layer whose fuzzed L_inf norm spiked past the threshold."""
+    layer_name: str
+    module_type: str
+    region: str            # attention | mlp | head | embedding | norm | conv | other
+    depth: str             # early | middle | late
+    parent_module: str
+    spike_ratio: float     # peak fuzzed L_inf / clean max L_inf
+    z_score: float         # (peak - clean mean) / clean std
+    peak_l_inf: float
+    baseline_max_l_inf: float
+    trigger_tag: str
+    trigger_iteration: int
+
+
+@dataclass
 class TrojanScanReport:
     model_name: str
     num_fuzz_samples: int
@@ -44,6 +70,175 @@ class TrojanScanReport:
     suspected_trojan: bool
     suspicious_layers: List[str]
     iteration_reports: List[FuzzIterationReport] = field(default_factory=list)
+    layer_anomalies: List[LayerAnomaly] = field(default_factory=list)
+    anomaly_regions: Dict[str, List[str]] = field(default_factory=dict)
+    baseline_stats: Dict[str, LayerBaselineStat] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Input perturbation generators (Issue #6)
+# ---------------------------------------------------------------------------
+
+FuzzCase = Tuple[str, Any]  # (input_tag, input_tensor)
+
+
+def _require_torch() -> None:
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("PyTorch is required for dynamic fuzzing. Install with `pip install torch`.")
+
+
+def generate_gaussian_noise(
+    shape: Tuple[int, ...],
+    sigma: float = 1.0,
+    generator: Optional["torch.Generator"] = None,
+) -> "torch.Tensor":
+    """Zero-mean Gaussian noise with standard deviation ``sigma``.
+
+    Sweeping ``sigma`` across a wide range probes activation behaviour far
+    outside the benign input distribution.
+    """
+    _require_torch()
+    if sigma < 0:
+        raise ValueError("sigma must be non-negative")
+    return torch.randn(tuple(shape), generator=generator) * sigma
+
+
+def generate_boundary_inputs(
+    shape: Tuple[int, ...],
+    magnitude: float = 10.0,
+    num_impulses: int = 3,
+) -> List[FuzzCase]:
+    """Extreme-value inputs: all zeros, saturated +/-magnitude and sparse delta impulses.
+
+    A delta impulse sets a single feature to ``magnitude`` and everything else
+    to zero, isolating triggers keyed on one input position.
+    """
+    _require_torch()
+    shape = tuple(shape)
+    cases: List[FuzzCase] = [
+        ("boundary_zeros", torch.zeros(shape)),
+        (f"boundary_pos_{magnitude:g}", torch.full(shape, float(magnitude))),
+        (f"boundary_neg_{magnitude:g}", torch.full(shape, -float(magnitude))),
+    ]
+
+    per_sample = int(np.prod(shape[1:])) if len(shape) > 1 else int(np.prod(shape))
+    if per_sample > 0 and num_impulses > 0:
+        # Spread impulses evenly: first, middle and last features, etc.
+        positions = sorted({int(p) for p in np.linspace(0, per_sample - 1, num_impulses)})
+        for pos in positions:
+            x = torch.zeros(shape)
+            if len(shape) > 1:
+                x.view(shape[0], -1)[:, pos] = float(magnitude)
+            else:
+                x.view(-1)[pos] = float(magnitude)
+            cases.append((f"boundary_delta_{pos}", x))
+    return cases
+
+
+def generate_patch_triggers(
+    shape: Tuple[int, ...],
+    patch_size: Tuple[int, int] = (8, 8),
+    intensity: float = 1.0,
+    positions: Tuple[str, ...] = ("bottom_right", "top_left", "center"),
+    base_input: Optional["torch.Tensor"] = None,
+) -> List[FuzzCase]:
+    """BadNets-style triggers: a high-contrast checkerboard patch stamped on an image.
+
+    The patch is written to the last two (spatial) dimensions, so ``shape`` is
+    expected to look like (N, C, H, W), (C, H, W) or (H, W).
+    """
+    _require_torch()
+    shape = tuple(shape)
+    if len(shape) < 2:
+        raise ValueError("Patch triggers need at least 2 spatial dimensions (H, W)")
+
+    height, width = shape[-2], shape[-1]
+    ph, pw = min(patch_size[0], height), min(patch_size[1], width)
+    # Checkerboard of +intensity / -intensity (maximum local contrast)
+    rows = torch.arange(ph).unsqueeze(1)
+    cols = torch.arange(pw).unsqueeze(0)
+    patch = torch.where((rows + cols) % 2 == 0, float(intensity), -float(intensity))
+
+    anchors = {
+        "top_left": (0, 0),
+        "top_right": (0, width - pw),
+        "bottom_left": (height - ph, 0),
+        "bottom_right": (height - ph, width - pw),
+        "center": ((height - ph) // 2, (width - pw) // 2),
+    }
+    cases: List[FuzzCase] = []
+    for pos in positions:
+        if pos not in anchors:
+            raise ValueError(f"Unknown patch position '{pos}'. Choose from {sorted(anchors)}")
+        top, left = anchors[pos]
+        x = base_input.clone().float() if base_input is not None else torch.zeros(shape)
+        x[..., top:top + ph, left:left + pw] = patch
+        cases.append((f"patch_{pos}_{ph}x{pw}", x))
+    return cases
+
+
+def generate_token_perturbations(
+    vocab_size: int,
+    seq_len: int,
+    batch_size: int = 1,
+    generator: Optional["torch.Generator"] = None,
+) -> List[FuzzCase]:
+    """Token-ID perturbations for language models.
+
+    Covers extreme repetition of a single token, alternating token pairs,
+    vocabulary boundary IDs and rarely used tail-of-vocabulary tokens.
+    """
+    _require_torch()
+    if vocab_size < 2 or seq_len < 1:
+        raise ValueError("vocab_size must be >= 2 and seq_len >= 1")
+    shape = (batch_size, seq_len)
+    rand_tok = int(torch.randint(0, vocab_size, (1,), generator=generator).item())
+    tail_start = max(0, int(vocab_size * 0.95))  # last 5% of the vocabulary
+
+    alternating = torch.tensor([rand_tok, vocab_size - 1]).repeat(seq_len // 2 + 1)[:seq_len]
+    return [
+        (f"token_repeat_{rand_tok}", torch.full(shape, rand_tok, dtype=torch.long)),
+        ("token_repeat_min_id", torch.zeros(shape, dtype=torch.long)),
+        ("token_repeat_max_id", torch.full(shape, vocab_size - 1, dtype=torch.long)),
+        ("token_alternating", alternating.unsqueeze(0).repeat(batch_size, 1)),
+        ("token_vocab_tail", torch.randint(tail_start, vocab_size, shape, generator=generator)),
+    ]
+
+
+def build_auto_fuzz_suite(
+    input_shape: Optional[Tuple[int, ...]] = None,
+    vocab_size: Optional[int] = None,
+    seq_len: Optional[int] = None,
+    sigmas: Tuple[float, ...] = (0.5, 1.0, 2.0, 5.0, 10.0),
+    patch_size: Tuple[int, int] = (8, 8),
+    seed: Optional[int] = None,
+) -> List[FuzzCase]:
+    """Build the default fuzzing suite and interleave strategies round-robin.
+
+    Interleaving means even a short run touches every strategy
+    (noise, boundary, patch, token) instead of exhausting one first.
+    """
+    _require_torch()
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    groups: List[List[FuzzCase]] = []
+
+    if vocab_size is not None:
+        groups.append(generate_token_perturbations(vocab_size, seq_len or 32, generator=gen))
+    elif input_shape is not None:
+        shape = tuple(input_shape)
+        groups.append([(f"gaussian_sigma_{s:g}", generate_gaussian_noise(shape, s, gen)) for s in sigmas])
+        groups.append(generate_boundary_inputs(shape))
+        if len(shape) >= 3:  # image-like: (N, C, H, W) or (N, H, W)
+            groups.append(generate_patch_triggers(shape, patch_size))
+    else:
+        raise ValueError("Automated fuzzing needs either input_shape or vocab_size")
+
+    suite: List[FuzzCase] = []
+    for i in range(max(len(g) for g in groups)):
+        for g in groups:
+            if i < len(g):
+                suite.append(g[i])
+    return suite
 
 
 class ActivationHookManager:
@@ -63,6 +258,7 @@ class ActivationHookManager:
             module_types = (module_types,)
         self.module_types = module_types
         self.hooks: List[Any] = []
+        self.hooked_modules: Dict[str, Any] = {}
         self.current_activations: Dict[str, LayerActivationStat] = {}
         self._register_hooks()
 
@@ -126,6 +322,7 @@ class ActivationHookManager:
             if should_hook:
                 h = module.register_forward_hook(self._hook_fn(name))
                 self.hooks.append(h)
+                self.hooked_modules[name] = module
 
     def clear(self):
         self.current_activations.clear()
@@ -136,6 +333,72 @@ class ActivationHookManager:
             h.remove()
         self.hooks.clear()
         self.current_activations.clear()
+
+
+# ---------------------------------------------------------------------------
+# Sub-network isolation helpers (Issue #5)
+# ---------------------------------------------------------------------------
+
+_ATTENTION_KEYS = ("attn", "attention", "q_proj", "k_proj", "v_proj", "qkv", "query", "key", "value")
+_HEAD_KEYS = ("head", "classifier", "lm_head", "score", "logits")
+_EMBED_KEYS = ("embed", "emb", "wte", "wpe")
+_NORM_KEYS = ("norm", "ln_", "layernorm", "batchnorm")
+_MLP_KEYS = ("mlp", "ffn", "feed_forward", "intermediate", "dense", "fc", "linear")
+
+
+def classify_module_region(name: str, module: Any, is_last: bool = False) -> str:
+    """Label a module as attention, mlp, head, embedding, norm, conv or other.
+
+    Uses the module type first, then common naming conventions
+    (HuggingFace, timm, nanoGPT). The final hooked layer is treated as the head.
+    """
+    lname = name.lower()
+    tname = type(module).__name__.lower()
+    parts = lname.replace("_", ".").split(".")
+
+    if "attention" in tname or any(k in lname for k in _ATTENTION_KEYS):
+        return "attention"
+    if is_last or any(k in parts or lname.endswith(k) for k in _HEAD_KEYS):
+        return "head"
+    if "embedding" in tname or any(k in lname for k in _EMBED_KEYS):
+        return "embedding"
+    if "norm" in tname or any(k in lname for k in _NORM_KEYS):
+        return "norm"
+    if "conv" in tname:
+        return "conv"
+    if "linear" in tname or any(k in lname for k in _MLP_KEYS):
+        return "mlp"
+    return "other"
+
+
+def _depth_bucket(index: int, total: int) -> str:
+    position = index / max(total - 1, 1)
+    if position < 1 / 3:
+        return "early"
+    if position < 2 / 3:
+        return "middle"
+    return "late"
+
+
+class _RunningStat:
+    """Welford running mean / std / max for one layer's L_inf norms."""
+
+    def __init__(self) -> None:
+        self.n = 0
+        self.mean = 0.0
+        self.m2 = 0.0
+        self.max = 0.0
+
+    def update(self, x: float) -> None:
+        self.n += 1
+        delta = x - self.mean
+        self.mean += delta / self.n
+        self.m2 += delta * (x - self.mean)
+        self.max = max(self.max, x)
+
+    @property
+    def std(self) -> float:
+        return (self.m2 / (self.n - 1)) ** 0.5 if self.n > 1 else 0.0
 
 
 class DynamicTrojanFuzzer:
@@ -155,32 +418,77 @@ class DynamicTrojanFuzzer:
 
     def run_fuzzing(
         self,
-        sample_inputs_generator: Callable[[int], Any],
-        baseline_input: Any,
+        sample_inputs_generator: Optional[Callable[[int], Any]] = None,
+        baseline_input: Any = None,
         num_iterations: int = 50,
         progress_callback: Optional[Callable[[int, int, str, float], None]] = None,
+        input_shape: Optional[Tuple[int, ...]] = None,
+        vocab_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        seed: Optional[int] = None,
+        calibration_inputs: Optional[List[Any]] = None,
+        num_calibration: int = 16,
+        calibration_noise_std: float = 1.0,
     ) -> TrojanScanReport:
-        """Run fuzzing over generated sample inputs and compare against baseline activations."""
-        hook_mgr = ActivationHookManager(self.model)
+        """Fuzz the model and flag layers whose L_inf norm spikes above clean behaviour.
 
+        Manual mode: pass ``sample_inputs_generator`` and ``baseline_input``.
+        Automated mode: leave ``sample_inputs_generator`` as None and pass
+        ``input_shape`` (float models) or ``vocab_size`` (token models).
+
+        Clean calibration: layer statistics are measured over several benign
+        inputs, not a single tensor. Pass ``calibration_inputs`` explicitly,
+        or they are generated as ``baseline_input`` plus Gaussian noise
+        (``num_calibration`` samples, std ``calibration_noise_std``).
+        A layer is suspicious when its peak fuzzed L_inf / clean max L_inf
+        is at least ``spike_threshold``.
+        """
+        auto_suite: Optional[List[FuzzCase]] = None
+        if sample_inputs_generator is None:
+            auto_suite = build_auto_fuzz_suite(
+                input_shape=input_shape, vocab_size=vocab_size, seq_len=seq_len, seed=seed
+            )
+            if baseline_input is None:
+                gen = torch.Generator().manual_seed(seed) if seed is not None else None
+                if vocab_size is not None:
+                    baseline_input = torch.randint(0, vocab_size, (1, seq_len or 32), generator=gen)
+                else:
+                    baseline_input = torch.randn(tuple(input_shape), generator=gen)
+        elif baseline_input is None:
+            raise ValueError("baseline_input is required when a custom sample_inputs_generator is given")
+
+        calibration = self._build_calibration(
+            baseline_input, calibration_inputs, num_calibration, calibration_noise_std, vocab_size, seed
+        )
+
+        hook_mgr = ActivationHookManager(self.model)
         try:
-            # 1. Measure baseline activations
-            hook_mgr.clear()
-            with torch.no_grad():
-                _ = self.model(baseline_input)
-            baseline_stats = dict(hook_mgr.current_activations)
-            baseline_max_l_inf = max((s.l_inf_norm for s in baseline_stats.values()), default=1.0)
+            # 1. Clean calibration: running max / mean / std of L_inf per layer
+            running: Dict[str, _RunningStat] = {}
+            for clean_input in calibration:
+                hook_mgr.clear()
+                with torch.no_grad():
+                    _ = self.model(clean_input)
+                for name, stat in hook_mgr.current_activations.items():
+                    running.setdefault(name, _RunningStat()).update(stat.l_inf_norm)
+
+            baseline_stats = {
+                name: LayerBaselineStat(name, rs.max, rs.mean, rs.std, rs.n) for name, rs in running.items()
+            }
+            baseline_max_l_inf = max((b.max_l_inf for b in baseline_stats.values()), default=1.0)
             baseline_max_l_inf = max(baseline_max_l_inf, 1e-6)
 
-            peak_fuzzed_l_inf = baseline_max_l_inf
-            suspicious_layers: set[str] = set()
+            # 2. Fuzzing loop: track each layer's peak and what triggered it
+            peak_by_layer: Dict[str, Tuple[float, str, int]] = {}
+            peak_fuzzed_l_inf = 0.0
             iteration_reports: List[FuzzIterationReport] = []
 
-            # 2. Dynamic fuzzing loop
             for i in range(num_iterations):
-                test_input = sample_inputs_generator(i)
+                if auto_suite is not None:
+                    input_tag, test_input = auto_suite[i % len(auto_suite)]
+                else:
+                    input_tag, test_input = f"fuzz_step_{i + 1}", sample_inputs_generator(i)
                 hook_mgr.clear()
-
                 with torch.no_grad():
                     _ = self.model(test_input)
 
@@ -188,39 +496,38 @@ class DynamicTrojanFuzzer:
                 if not layer_stats:
                     continue
 
-                iter_max = 0.0
-                iter_top_layer = ""
+                iter_top_layer, iter_max = "", 0.0
                 for name, stat in layer_stats.items():
                     if stat.l_inf_norm > iter_max:
-                        iter_max = stat.l_inf_norm
-                        iter_top_layer = name
+                        iter_max, iter_top_layer = stat.l_inf_norm, name
+                    if name not in peak_by_layer or stat.l_inf_norm > peak_by_layer[name][0]:
+                        peak_by_layer[name] = (stat.l_inf_norm, input_tag, i + 1)
 
-                    # Check for anomalous activation spike relative to baseline layer stat
-                    base_layer_stat = baseline_stats.get(name)
-                    base_l_inf = base_layer_stat.l_inf_norm if base_layer_stat else 1.0
-                    base_l_inf = max(base_l_inf, 1e-6)
-
-                    if (stat.l_inf_norm / base_l_inf) >= self.spike_threshold:
-                        suspicious_layers.add(name)
-
-                if iter_max > peak_fuzzed_l_inf:
-                    peak_fuzzed_l_inf = iter_max
-
+                peak_fuzzed_l_inf = max(peak_fuzzed_l_inf, iter_max)
                 iteration_reports.append(
                     FuzzIterationReport(
                         iteration=i + 1,
-                        input_tag=f"fuzz_step_{i + 1}",
+                        input_tag=input_tag,
                         layer_stats=layer_stats,
                         max_l_inf=iter_max,
                         highest_layer=iter_top_layer,
                     )
                 )
-
                 if progress_callback is not None:
                     progress_callback(i + 1, num_iterations, iter_top_layer, iter_max)
 
-            spike_ratio = peak_fuzzed_l_inf / baseline_max_l_inf
-            suspected_trojan = spike_ratio >= self.spike_threshold or len(suspicious_layers) > 0
+            # 3. Sub-network isolation
+            anomalies = self._isolate_anomalies(hook_mgr.hooked_modules, baseline_stats, peak_by_layer)
+            spike_ratio = max((a.spike_ratio for a in anomalies), default=0.0)
+            if not anomalies:
+                spike_ratio = max(
+                    (peak / max(baseline_stats[n].max_l_inf, 1e-6)
+                     for n, (peak, _, _) in peak_by_layer.items() if n in baseline_stats),
+                    default=0.0,
+                )
+            regions: Dict[str, List[str]] = {}
+            for a in anomalies:
+                regions.setdefault(a.region, []).append(a.layer_name)
 
             return TrojanScanReport(
                 model_name=getattr(self.model, "__class__", type(self.model)).__name__,
@@ -228,10 +535,73 @@ class DynamicTrojanFuzzer:
                 baseline_l_inf=baseline_max_l_inf,
                 peak_fuzzed_l_inf=peak_fuzzed_l_inf,
                 spike_ratio=spike_ratio,
-                suspected_trojan=suspected_trojan,
-                suspicious_layers=sorted(list(suspicious_layers)),
+                suspected_trojan=len(anomalies) > 0,
+                suspicious_layers=sorted(a.layer_name for a in anomalies),
                 iteration_reports=iteration_reports,
+                layer_anomalies=anomalies,
+                anomaly_regions=regions,
+                baseline_stats=baseline_stats,
             )
-
         finally:
             hook_mgr.remove()
+
+    @staticmethod
+    def _build_calibration(
+        baseline_input: Any,
+        calibration_inputs: Optional[List[Any]],
+        num_calibration: int,
+        noise_std: float,
+        vocab_size: Optional[int],
+        seed: Optional[int],
+    ) -> List[Any]:
+        """Assemble the clean calibration set (always includes baseline_input)."""
+        if calibration_inputs is not None:
+            return [baseline_input] + list(calibration_inputs)
+
+        calibration = [baseline_input]
+        if not torch.is_tensor(baseline_input) or num_calibration <= 0:
+            return calibration
+        gen = torch.Generator().manual_seed(seed) if seed is not None else None
+        for _ in range(num_calibration):
+            if baseline_input.is_floating_point():
+                noise = torch.randn(baseline_input.shape, generator=gen) * noise_std
+                calibration.append(baseline_input + noise.to(baseline_input.dtype))
+            elif vocab_size is not None:
+                calibration.append(torch.randint(0, vocab_size, baseline_input.shape, generator=gen))
+        return calibration
+
+    def _isolate_anomalies(
+        self,
+        hooked_modules: Dict[str, Any],
+        baseline_stats: Dict[str, LayerBaselineStat],
+        peak_by_layer: Dict[str, Tuple[float, str, int]],
+    ) -> List[LayerAnomaly]:
+        """Return every layer whose spike ratio >= threshold, strongest first."""
+        names = list(hooked_modules)
+        anomalies: List[LayerAnomaly] = []
+        for idx, name in enumerate(names):
+            if name not in peak_by_layer or name not in baseline_stats:
+                continue
+            peak, tag, iteration = peak_by_layer[name]
+            base = baseline_stats[name]
+            ratio = peak / max(base.max_l_inf, 1e-6)
+            if ratio < self.spike_threshold:
+                continue
+            module = hooked_modules[name]
+            anomalies.append(
+                LayerAnomaly(
+                    layer_name=name,
+                    module_type=type(module).__name__,
+                    region=classify_module_region(name, module, is_last=(idx == len(names) - 1)),
+                    depth=_depth_bucket(idx, len(names)),
+                    parent_module=name.rsplit(".", 1)[0] if "." in name else "<root>",
+                    spike_ratio=ratio,
+                    z_score=(peak - base.mean_l_inf) / max(base.std_l_inf, 1e-6),
+                    peak_l_inf=peak,
+                    baseline_max_l_inf=base.max_l_inf,
+                    trigger_tag=tag,
+                    trigger_iteration=iteration,
+                )
+            )
+        anomalies.sort(key=lambda a: a.spike_ratio, reverse=True)
+        return anomalies
