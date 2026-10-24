@@ -16,6 +16,9 @@ backfilled (issue A3).
 - Quality gates in CI: ruff, mypy, cargo fmt and clippy, a coverage floor, diff coverage on PRs,
   a wheel smoke test, a no-PyTorch test job, Conventional Commit PR titles and a check that code
   changes come with test changes.
+- Remote Hugging Face model inspection via standard-library HTTP range requests (`aegis.hub`): inspect
+  safetensors headers and metadata up to a 100 MB ceiling, pin revisions to commit SHAs, refuse pickle
+  downloads, and flag repositories requiring `trust_remote_code`.
 
 ### Security
 - The pickle scanner no longer trusts every `torch.*` and `numpy.*` global. A pickle calling
