@@ -19,6 +19,8 @@ backfilled (issue A3).
 - Remote Hugging Face model inspection via standard-library HTTP range requests (`aegis.hub`): inspect
   safetensors headers and metadata up to a 100 MB ceiling, pin revisions to commit SHAs, refuse pickle
   downloads, and flag repositories requiring `trust_remote_code`.
+- Remote GGUF header inspection and CLI command `aegis scan hf://org/repo[@revision]` with dynamic range
+  buffer growth (64 MB cap), chat template injection analysis, and credential checks before downloading.
 
 ### Security
 - The pickle scanner no longer trusts every `torch.*` and `numpy.*` global. A pickle calling
