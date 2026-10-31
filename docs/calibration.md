@@ -154,10 +154,10 @@ exponent lane > 6.5, out-of-range fraction > 0.001, low plane < 7.5.
 ## Proposals
 
 <!-- proposals:start -->
-These are proposals only. **No default has been changed.** Each one cites the measurements above,
-and the decision is left to the maintainers.
+Each proposal cites the measurements above. P1 and P2 were adopted in v0.2.0 (issue D1); P3 is
+tracked in issue D2.
 
-### P1: float16-specific exponent-lane threshold (recommended)
+### P1: float16-specific exponent-lane threshold (adopted)
 
 **Evidence.**
 - All 37 float16 false positives (1.29% of float16 tensors) are attention **bias** vectors of 2,304–3,072 elements in three older LLMs: Pythia-160m, Pythia-410m and BLOOM-560m.
@@ -167,13 +167,17 @@ and the decision is left to the maintainers.
 
 **Proposal.** Use an exponent-lane threshold of **7.2 for float16** and keep 6.5 for float32 and bfloat16. That clears all 37 false positives with a 0.35-bit margin. Payload sensitivity on float16 holds up, because the out-of-range rule had zero float16 false positives and is what catches partial overwrites.
 
-**Effect.** 3 of the 54 scanned models stop failing at `--fail-on medium`, taking the model-level false-positive rate from 7.4% to 1.9%. Until this is adopted, use `--exponent-threshold 7.2` for float16 checkpoints.
+**Effect.** 3 of the 54 scanned models stop failing at `--fail-on medium`, taking the model-level false-positive rate from 7.4% to 1.9%.
 
-### P2: keep the low-plane floor at 7.5 and document the one DETR hit
+**Adopted.** Float16 now uses its own default, `exponent_f16` = 7.2 in `aegis/thresholds.py` (CLI: `--exponent-threshold-f16`). Float32 and bfloat16 keep 6.5. The value was derived from the committed results: across 2,645 clean float16 tensors the largest exponent lane is 6.852 (`EleutherAI/pythia-410m` · `gpt_neox.layers.14.attention.query_key_value.bias`), p99 is 6.57 and p99.9 is 6.83. 7.2 is that maximum plus 0.35 bits, and random float16 data measures 7.6–8.0. Partial overwrites are caught by the out-of-range rule, which this change does not touch.
+
+### P2: keep the low-plane floor at 7.5 and document the one DETR hit (adopted)
 
 **Evidence.** One float32 tensor out of 8,441 tripped the rule: `facebook/detr-resnet-50` · `model.decoder.layers.0.self_attn.v_proj.weight`, with a low plane of 5.94 and a normal exponent lane of 2.42. A trained weight with structured low bits is a genuine anomaly, but this one is benign.
 
 **Proposal.** Do not lower the floor. A floor of 5.5 would clear this tensor, but it would also miss payloads with about 6 bits per byte, such as base64 text, which sit between 5.5 and 7.5. The ASCII test payload scored 4.42. Record this tensor as a known false positive. The treatment `aegis disarm` removes the structure at no measurable accuracy cost; see docs/disarm_impact.md.
+
+**Adopted.** The floor stays at 7.5. `facebook/detr-resnet-50` · `model.decoder.layers.0.self_attn.v_proj.weight` (low plane 5.94) is an accepted false positive.
 
 ### P3: packed quantized tensors need format-aware analysis, not a new threshold
 
