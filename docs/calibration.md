@@ -216,9 +216,9 @@ tracked in issue D2.
 
 **Proposal.** Use an exponent-lane threshold of **7.2 for float16** and keep 6.5 for float32 and bfloat16. That clears all 37 false positives with a 0.35-bit margin. Payload sensitivity on float16 holds up, because the out-of-range rule had zero float16 false positives and is what catches partial overwrites.
 
-**Effect.** 3 of the 54 scanned models stop failing at `--fail-on medium`, taking the model-level false-positive rate from 7.4% to 1.9%.
+**Effect.** On the new run, 1 of 49 safetensors models fails at `--fail-on medium` (2.04%), and 0 of 14 MLX models and 0 of 14 GGUF files do. The old run had 4 of 54 (7.41%) before this threshold. Five pinned models failed to download in the new run (#48). On its own, the exponent-lane rule is now less sensitive: it fires at about 50% overwritten instead of about 25%. The out-of-range rule still catches overwrites of 5% and above every time.
 
-**Adopted.** Float16 now uses its own default, `exponent_f16` = 7.2 in `aegis/thresholds.py` (CLI: `--exponent-threshold-f16`). Float32 and bfloat16 keep 6.5. The value was derived from the committed results: across 2,645 clean float16 tensors the largest exponent lane is 6.852 (`EleutherAI/pythia-410m` · `gpt_neox.layers.14.attention.query_key_value.bias`), p99 is 6.57 and p99.9 is 6.83. 7.2 is that maximum plus 0.35 bits, and random float16 data measures 7.6–8.0. Partial overwrites are caught by the out-of-range rule, which this change does not touch.
+**Adopted.** Float16 now uses its own default, `exponent_f16` = 7.2 in `aegis/thresholds.py` (CLI: `--exponent-threshold-f16`). Float32 and bfloat16 keep 6.5. The value was derived from the committed results: across 6,326 clean float16 tensors with a measured lane, the largest exponent lane is 6.852 (`EleutherAI/pythia-410m` · `gpt_neox.layers.14.attention.query_key_value.bias`), p99 is 6.32 and p99.9 is 6.80, and 0 of 6,590 float16 tensors trip the rule. 7.2 is that maximum plus 0.35 bits, and random float16 data measures 7.6–8.0. Partial overwrites are caught by the out-of-range rule, which this change does not touch.
 
 ### P2: keep the low-plane floor at 7.5 and document the one DETR hit (adopted)
 
