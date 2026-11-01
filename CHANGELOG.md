@@ -10,6 +10,7 @@ backfilled (issue A3).
 ## [Unreleased]
 
 ### Added
+- A "Design history" banner on six older design documents, and tests/test_docs.py, which checks the banners and that every relative link in README.md and docs/*.md points to an existing file.
 - docs/KNOWN_BYPASSES.md: every known bypass and limit, with its evidence and where a fix is tracked.
 - Tests of the disarm guarantee at the default width for float32, float16 and bfloat16, in
   safetensors and GGUF files: the rounded-away bits hold nothing afterwards.
