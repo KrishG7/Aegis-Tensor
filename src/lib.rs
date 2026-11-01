@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use half::{bf16, f16};
 use memmap2::MmapOptions;
 use pyo3::exceptions::PyIOError;
