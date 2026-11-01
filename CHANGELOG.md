@@ -9,6 +9,12 @@ backfilled (issue A3).
 
 ## [Unreleased]
 
+### Changed
+- float16 tensors use their own exponent-lane threshold, 7.2 (`--exponent-threshold-f16`); float32
+  and bfloat16 keep 6.5. This clears the 37 float16 attention-bias false positives found in
+  calibration (docs/calibration.md, P1). The low-plane floor stays at 7.5, and the one DETR tensor
+  below it is recorded as an accepted false positive (P2).
+
 ### Added
 - docs/KNOWN_BYPASSES.md: every known bypass and limit, with its evidence and where a fix is tracked.
 - Tests of the disarm guarantee at the default width for float32, float16 and bfloat16, in
@@ -18,6 +24,8 @@ backfilled (issue A3).
   changes come with test changes.
 
 ### Security
+- Safetensors scans pool small F32, F16 and BF16 tensors by dtype and apply the existing tensor
+  rules once each pool reaches 256 elements. Findings name the contributing tensors.
 - The pickle scanner no longer trusts every `torch.*` and `numpy.*` global. A pickle calling
   `torch.hub.load`, `torch.utils.cpp_extension.load_inline`, `torch.jit`, `torch.ops.load_library`,
   a nested `torch.load`, or a `numpy.testing` helper that runs code used to get no finding; these

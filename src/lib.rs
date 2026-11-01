@@ -47,7 +47,12 @@ pub struct TensorScanResult {
     /// text is for people and may change wording.
     #[pyo3(get)]
     pub rules: Vec<String>,
+    /// Tensor names contributing to a pooled small-tensor result. Empty for individual tensors.
+    #[pyo3(get)]
+    pub pooled_from: Vec<String>,
 }
+
+type AnalyzedTensor = (TensorScanResult, Option<(Dtype, Vec<u8>)>);
 
 #[pymethods]
 impl TensorScanResult {
@@ -364,7 +369,20 @@ struct Thresholds {
     entropy: f64,
     benford: Option<f64>,
     exponent: f64,
+    /// Exponent-lane threshold for float16 only. Its high byte also holds two mantissa
+    /// bits, so clean float16 tensors score higher than float32 or bfloat16 ones.
+    exponent_f16: f64,
     plane: f64,
+}
+
+/// The exponent-lane threshold for a dtype: float16 has its own, every other float dtype
+/// uses the general one.
+fn exponent_threshold_for(dtype: Dtype, t: &Thresholds) -> f64 {
+    if matches!(dtype, Dtype::F16) {
+        t.exponent_f16
+    } else {
+        t.exponent
+    }
 }
 
 /// Apply every tensor rule to one tensor's raw little-endian bytes. Used for safetensors
@@ -452,12 +470,13 @@ fn analyze_tensor(
     }
 
     // Rule 2: sign/exponent lane is random-looking, so the float values were overwritten.
+    let exponent_threshold = exponent_threshold_for(dtype, &t);
     if let Some(lane_entropy) = exponent_lane_entropy {
-        if lane_entropy > t.exponent {
+        if lane_entropy > exponent_threshold {
             rules.push("exponent_lane".to_string());
             anomaly_reasons.push(format!(
                 "Sign/exponent bytes are near-uniform ({:.4} > threshold {:.4}) - float values overwritten with encrypted or compressed data",
-                lane_entropy, t.exponent
+                lane_entropy, exponent_threshold
             ));
         }
     }
@@ -510,7 +529,32 @@ fn analyze_tensor(
         is_suspicious: !anomaly_reasons.is_empty(),
         rules,
         anomaly_reasons,
+        pooled_from: Vec::new(),
     }
+}
+
+fn analyze_small_tensor_pool(
+    dtype: Dtype,
+    tensors: &[(String, Vec<u8>, usize)],
+    thresholds: Thresholds,
+) -> Option<TensorScanResult> {
+    let num_elements: usize = tensors.iter().map(|(_, _, count)| *count).sum();
+    if num_elements < MIN_LANE_ELEMENTS {
+        return None;
+    }
+
+    let mut data_bytes = Vec::new();
+    for (_, bytes, _) in tensors {
+        data_bytes.extend_from_slice(bytes);
+    }
+    let pooled_from = tensors.iter().map(|(name, _, _)| name.clone()).collect();
+    let name = format!("pooled small {:?} tensors ({})", dtype, tensors.len());
+    let mut result = analyze_tensor(&name, dtype, vec![num_elements], &data_bytes, thresholds);
+    if !result.is_suspicious {
+        return None;
+    }
+    result.pooled_from = pooled_from;
+    Some(result)
 }
 
 /// Zero-copy scan of a .safetensors model file using memory mapping.
@@ -522,6 +566,9 @@ fn analyze_tensor(
 ///    overwritten with random-looking data). Clean weights measure about 2.7 bits,
 ///    and wide-dynamic-range clean weights reach about 6 bits. The default of 6.5
 ///    therefore detects overwrites covering roughly half of a tensor's floats.
+///    float16 uses `exponent_f16_entropy_threshold` (7.2) instead: its high byte also
+///    holds two mantissa bits, and clean float16 biases measured up to 6.85
+///    (docs/calibration.md).
 /// 3. Low mantissa bit planes below `plane_floor` (structured data hidden in the
 ///    least significant bits). Clean weights measure about 8 bits.
 ///
@@ -533,7 +580,8 @@ fn analyze_tensor(
     entropy_threshold = 7.92,
     benford_mad_threshold = None,
     exponent_entropy_threshold = 6.5,
-    plane_floor = 7.5
+    plane_floor = 7.5,
+    exponent_f16_entropy_threshold = 7.2
 ))]
 pub fn scan_safetensors(
     path: &str,
@@ -541,6 +589,7 @@ pub fn scan_safetensors(
     benford_mad_threshold: Option<f64>,
     exponent_entropy_threshold: f64,
     plane_floor: f64,
+    exponent_f16_entropy_threshold: f64,
 ) -> PyResult<Vec<TensorScanResult>> {
     let file = File::open(path)
         .map_err(|e| PyIOError::new_err(format!("Failed to open model file '{}': {}", path, e)))?;
@@ -561,9 +610,10 @@ pub fn scan_safetensors(
         entropy: entropy_threshold,
         benford: benford_mad_threshold,
         exponent: exponent_entropy_threshold,
+        exponent_f16: exponent_f16_entropy_threshold,
         plane: plane_floor,
     };
-    let results: Vec<TensorScanResult> = tensor_names
+    let analyzed: Vec<AnalyzedTensor> = tensor_names
         .par_iter()
         .map(|name| {
             let tensor_view = match tensors.tensor(name) {
@@ -571,35 +621,73 @@ pub fn scan_safetensors(
                 Err(error) => {
                     // An unreadable tensor is never silently dropped: a tampered
                     // tensor is exactly the kind a scanner must not skip.
-                    return TensorScanResult {
-                        name: name.clone(),
-                        dtype: "unknown".to_string(),
-                        shape: Vec::new(),
-                        num_elements: 0,
-                        entropy: 0.0,
-                        benford_mad: 0.0,
-                        lane_entropies: Vec::new(),
-                        exponent_lane_entropy: None,
-                        low_plane_entropy: None,
-                        out_of_range_fraction: None,
-                        is_suspicious: true,
-                        rules: vec!["unreadable".to_string()],
-                        anomaly_reasons: vec![format!(
-                            "Tensor data could not be read ({}) - possible tampering",
-                            error
-                        )],
-                    };
+                    return (
+                        TensorScanResult {
+                            name: name.clone(),
+                            dtype: "unknown".to_string(),
+                            shape: Vec::new(),
+                            num_elements: 0,
+                            entropy: 0.0,
+                            benford_mad: 0.0,
+                            lane_entropies: Vec::new(),
+                            exponent_lane_entropy: None,
+                            low_plane_entropy: None,
+                            out_of_range_fraction: None,
+                            is_suspicious: true,
+                            rules: vec!["unreadable".to_string()],
+                            anomaly_reasons: vec![format!(
+                                "Tensor data could not be read ({}) - possible tampering",
+                                error
+                            )],
+                            pooled_from: Vec::new(),
+                        },
+                        None,
+                    );
                 }
             };
-            analyze_tensor(
-                name,
-                tensor_view.dtype(),
-                tensor_view.shape().to_vec(),
-                tensor_view.data(),
-                thresholds,
-            )
+            let dtype = tensor_view.dtype();
+            let shape = tensor_view.shape().to_vec();
+            let num_elements: usize = shape.iter().product();
+            let small_float_data = if num_elements < MIN_LANE_ELEMENTS
+                && matches!(dtype, Dtype::F32 | Dtype::F16 | Dtype::BF16)
+            {
+                Some((dtype, tensor_view.data().to_vec()))
+            } else {
+                None
+            };
+            let result = analyze_tensor(name, dtype, shape, tensor_view.data(), thresholds);
+            (result, small_float_data)
         })
         .collect();
+
+    let mut results = Vec::new();
+    let mut small_f32 = Vec::new();
+    let mut small_f16 = Vec::new();
+    let mut small_bf16 = Vec::new();
+    for (name, (result, small_float_data)) in tensor_names.iter().cloned().zip(analyzed) {
+        if let Some((dtype, data)) = small_float_data {
+            let entry = (name, data, result.num_elements);
+            match dtype {
+                Dtype::F32 => small_f32.push(entry),
+                Dtype::F16 => small_f16.push(entry),
+                Dtype::BF16 => small_bf16.push(entry),
+                _ => unreachable!("only float tensors are pooled"),
+            }
+        }
+        results.push(result);
+    }
+    for pool in [&mut small_f32, &mut small_f16, &mut small_bf16] {
+        pool.sort_by(|left, right| left.0.cmp(&right.0));
+    }
+    for (dtype, contributors) in [
+        (Dtype::F32, small_f32),
+        (Dtype::F16, small_f16),
+        (Dtype::BF16, small_bf16),
+    ] {
+        if let Some(pooled_result) = analyze_small_tensor_pool(dtype, &contributors, thresholds) {
+            results.push(pooled_result);
+        }
+    }
 
     Ok(results)
 }
@@ -635,7 +723,8 @@ fn parse_dtype(name: &str) -> Option<(Dtype, usize)> {
     entropy_threshold = 7.92,
     benford_mad_threshold = None,
     exponent_entropy_threshold = 6.5,
-    plane_floor = 7.5
+    plane_floor = 7.5,
+    exponent_f16_entropy_threshold = 7.2
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn scan_tensor_bytes(
@@ -647,6 +736,7 @@ pub fn scan_tensor_bytes(
     benford_mad_threshold: Option<f64>,
     exponent_entropy_threshold: f64,
     plane_floor: f64,
+    exponent_f16_entropy_threshold: f64,
 ) -> PyResult<TensorScanResult> {
     let (parsed, width) = parse_dtype(dtype).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("unsupported dtype '{}'", dtype))
@@ -666,6 +756,7 @@ pub fn scan_tensor_bytes(
         entropy: entropy_threshold,
         benford: benford_mad_threshold,
         exponent: exponent_entropy_threshold,
+        exponent_f16: exponent_f16_entropy_threshold,
         plane: plane_floor,
     };
     Ok(analyze_tensor(name, parsed, shape, data, thresholds))
@@ -696,6 +787,66 @@ mod tests {
 
         let ones = vec![0xFFu8; 500];
         assert_eq!(shannon_entropy_bytes(&ones), 0.0);
+    }
+
+    #[test]
+    fn test_small_tensor_pool_below_lane_floor_is_not_analyzed() {
+        let count = MIN_LANE_ELEMENTS - 1;
+        let tensors = vec![("small".to_string(), weight_like_f32(count, 7), count)];
+        let thresholds = Thresholds {
+            entropy: 7.92,
+            benford: None,
+            exponent: 6.5,
+            exponent_f16: 7.2,
+            plane: 7.5,
+        };
+
+        assert!(analyze_small_tensor_pool(Dtype::F32, &tensors, thresholds).is_none());
+    }
+
+    #[test]
+    fn test_small_tensor_pool_detects_each_float_dtype_and_keeps_name_order() {
+        let thresholds = Thresholds {
+            entropy: 7.92,
+            benford: None,
+            exponent: 6.5,
+            exponent_f16: 7.2,
+            plane: 7.5,
+        };
+        for (dtype, width) in [(Dtype::F32, 4), (Dtype::F16, 2), (Dtype::BF16, 2)] {
+            let tensors: Vec<(String, Vec<u8>, usize)> = (0..4)
+                .map(|index| {
+                    let name = format!("chunk.{}", index);
+                    let bytes = (0..64usize)
+                        .flat_map(|sample| {
+                            let high_byte = (index * 64 + sample) as u8;
+                            (0..width).map(
+                                move |lane| {
+                                    if lane + 1 == width {
+                                        high_byte
+                                    } else {
+                                        0
+                                    }
+                                },
+                            )
+                        })
+                        .collect();
+                    (name, bytes, 64)
+                })
+                .collect();
+            let result = analyze_small_tensor_pool(dtype, &tensors, thresholds)
+                .expect("random-looking pool should have findings");
+            assert!(result.is_suspicious);
+            assert_eq!(
+                result.pooled_from,
+                vec![
+                    "chunk.0".to_string(),
+                    "chunk.1".to_string(),
+                    "chunk.2".to_string(),
+                    "chunk.3".to_string()
+                ]
+            );
+        }
     }
 
     #[test]
@@ -926,5 +1077,33 @@ mod tests {
             "mixed plane fraction was {}",
             fraction
         );
+    }
+
+    /// Two-byte words whose high (sign/exponent) byte cycles through 112 values: an
+    /// exponent lane of about 6.8 bits, between the general and the float16 thresholds.
+    fn wide_exponent_lane_words(n: usize) -> Vec<u8> {
+        (0..n)
+            .flat_map(|i| [(i % 251) as u8, (i % 112) as u8])
+            .collect()
+    }
+
+    #[test]
+    fn test_analyze_tensor_uses_the_f16_exponent_threshold_only_for_f16() {
+        let thresholds = Thresholds {
+            entropy: 7.92,
+            benford: None,
+            exponent: 6.5,
+            exponent_f16: 7.2,
+            plane: 7.5,
+        };
+        let data = wide_exponent_lane_words(4096);
+
+        let as_f16 = analyze_tensor("b", Dtype::F16, vec![4096], &data, thresholds);
+        let as_bf16 = analyze_tensor("b", Dtype::BF16, vec![4096], &data, thresholds);
+
+        let lane = as_f16.exponent_lane_entropy.expect("lane is measured");
+        assert!(lane > 6.5 && lane < 7.2, "fixture lane was {}", lane);
+        assert!(!as_f16.rules.contains(&"exponent_lane".to_string()));
+        assert!(as_bf16.rules.contains(&"exponent_lane".to_string()));
     }
 }

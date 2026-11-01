@@ -43,14 +43,14 @@
       "benchmark": "docs/calibration.md",
       "text": "False positives at default thresholds on popular public models: {safetensors_flagged} of {safetensors_models} safetensors models, {mlx_flagged} of {mlx_models} MLX models and {gguf_flagged} of {gguf_models} GGUF files raise a finding. {template_flagged} of {template_files} GGUF files have a flagged chat template.",
       "values": {
-        "safetensors_flagged": 0,
-        "safetensors_models": 3,
+        "safetensors_flagged": 1,
+        "safetensors_models": 49,
         "mlx_flagged": 0,
-        "mlx_models": 0,
+        "mlx_models": 14,
         "gguf_flagged": 0,
-        "gguf_models": 0,
-        "template_flagged": 0,
-        "template_files": 3
+        "gguf_models": 14,
+        "template_flagged": 1,
+        "template_files": 34
       },
       "status": "pending"
     },
@@ -109,14 +109,13 @@
       "text": "Flags a pickle that calls a callable built at runtime (the result of another call), even through the memo, and scans pickles embedded in PyTorch storages."
     },
     {
+      "id": "C22",
+      "text": "For safetensors, pools F32, F16 and BF16 tensors under 256 elements by dtype when their combined pool reaches 256 elements, and names the contributing tensors in findings."
+    },
+    {
       "id": "L01",
       "kind": "limit",
       "text": "Random bits hidden in the low mantissa bits cannot be detected by any static statistic. Only `aegis disarm` removes them."
-    },
-    {
-      "id": "L02",
-      "kind": "limit",
-      "text": "Payloads split across tensors of fewer than 256 elements are not detected."
     }
   ]
 }

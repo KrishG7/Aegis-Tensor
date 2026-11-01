@@ -440,6 +440,7 @@ def from_safetensors(path: str, tensor_results, header_result=None) -> list[Find
                         "low_plane_entropy": _round(result.low_plane_entropy),
                         "out_of_range_fraction": _round(result.out_of_range_fraction, 6),
                         "benford_mad": round(result.benford_mad, 4) if rule_code == "benford" else None,
+                        **({"pooled_from": result.pooled_from} if result.pooled_from else {}),
                     },
                     command=command,
                 )
