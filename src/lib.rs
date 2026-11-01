@@ -52,6 +52,8 @@ pub struct TensorScanResult {
     pub pooled_from: Vec<String>,
 }
 
+type AnalyzedTensor = (TensorScanResult, Option<(Dtype, Vec<u8>)>);
+
 #[pymethods]
 impl TensorScanResult {
     fn __repr__(&self) -> String {
@@ -611,7 +613,7 @@ pub fn scan_safetensors(
         exponent_f16: exponent_f16_entropy_threshold,
         plane: plane_floor,
     };
-    let analyzed: Vec<(TensorScanResult, Option<(Dtype, Vec<u8>)>)> = tensor_names
+    let analyzed: Vec<AnalyzedTensor> = tensor_names
         .par_iter()
         .map(|name| {
             let tensor_view = match tensors.tensor(name) {
