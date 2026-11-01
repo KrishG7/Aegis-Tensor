@@ -7,6 +7,7 @@ from aegis import (
     CORE_AVAILABLE,
     benford_law_mad,
     mantissa_bit_plane_entropy,
+    scan_tensor_bytes,
     shannon_entropy_bytes,
     shannon_entropy_chunked,
 )
@@ -43,6 +44,17 @@ def test_mantissa_bit_plane_entropy_ignores_sign_and_exponent():
     bit_0_entropy, bit_1_entropy = mantissa_bit_plane_entropy(values.tobytes())
     assert bit_0_entropy == 0.0
     assert bit_1_entropy == 0.0
+
+
+@pytest.mark.skipif(not CORE_AVAILABLE, reason="aegis_core Rust extension not compiled")
+def test_scan_tensor_bytes_flags_random_float_bytes():
+    """Random float tensor bytes should trigger tensor statistical detection."""
+    data = np.random.default_rng(123).standard_normal(4096).astype(np.float32).tobytes()
+    result = scan_tensor_bytes("random_float", "F32", [4096], data)
+
+    assert result.is_suspicious
+    assert result.rules
+    assert "exponent_lane" in result.rules or "pooled_entropy" in result.rules
 
 
 @pytest.mark.skipif(not CORE_AVAILABLE, reason="aegis_core Rust extension not compiled")
