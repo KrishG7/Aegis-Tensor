@@ -11,6 +11,7 @@ import os
 import pickle
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -20,6 +21,7 @@ from typer.testing import CliRunner
 from aegis import CORE_AVAILABLE, TORCH_AVAILABLE, scan_safetensors
 from aegis.cli import app
 from aegis.disarm import disarm_file
+from aegis.findings import from_safetensors
 from aegis.formatscan import scan_safetensors_header
 from aegis.picklescan import scan_pickle_file
 
@@ -319,14 +321,71 @@ def test_t18_scan_output_names_the_metadata_payload_and_its_treatment(tmp_path):
 
 
 @needs_core
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known gap: tensors under 256 elements are below the sample floor, so a payload "
-    "split into many tiny tensors is not flagged. Strict, so closing the gap will be noticed.",
-)
-@pytest.mark.claim("L02")
+@pytest.mark.claim("C22")
 def test_t19_payload_split_into_tiny_tensors_is_flagged(tmp_path):
     rng = np.random.default_rng(19)
     tiny = {f"chunk.{i}": rng.integers(0, 256, 4 * 64, dtype=np.uint8).view(np.float32) for i in range(64)}
     path = _write(tmp_path / "m.safetensors", tiny)
-    assert any(r.is_suspicious for r in scan_safetensors(str(path)))
+    assert any(result.is_suspicious for result in scan_safetensors(str(path)))
+
+
+@needs_core
+@pytest.mark.claim("C22")
+def test_pooled_finding_names_every_contributing_tensor(tmp_path):
+    rng = np.random.default_rng(19)
+    tiny = {f"chunk.{i}": rng.integers(0, 256, 4 * 64, dtype=np.uint8).view(np.float32) for i in range(64)}
+    path = _write(tmp_path / "m.safetensors", tiny)
+
+    results = scan_safetensors(str(path))
+    findings = from_safetensors(str(path), results)
+    pooled_finding = next(f for f in findings if f.location.get("tensor", "").startswith("pooled small "))
+
+    assert pooled_finding.evidence["pooled_from"] == sorted(tiny)
+
+
+def test_pooled_result_provenance_is_in_finding_evidence():
+    contributors = ["chunk.0", "chunk.1"]
+    result = SimpleNamespace(
+        rules=["exponent_lane"],
+        anomaly_reasons=["random-looking pooled exponent lane"],
+        name="pooled small F32 tensors (2)",
+        dtype="F32",
+        num_elements=256,
+        entropy=7.0,
+        exponent_lane_entropy=7.0,
+        low_plane_entropy=None,
+        out_of_range_fraction=None,
+        benford_mad=0.0,
+        pooled_from=contributors,
+    )
+
+    finding = from_safetensors("model.safetensors", [result])[0]
+
+    assert finding.evidence["pooled_from"] == contributors
+
+
+@needs_core
+def test_small_clean_tensors_pooled_are_not_flagged(tmp_path):
+    rng = np.random.default_rng(0)
+    tensors = {f"weight.{i:02}": rng.normal(0, 0.02, 64).astype(np.float32) for i in range(64)}
+    tensors.update({f"layer_norm.{i}": rng.normal(1.0, 0.02, 64).astype(np.float32) for i in range(3)})
+    path = _write(tmp_path / "clean.safetensors", tensors)
+
+    assert not any(result.is_suspicious for result in scan_safetensors(str(path)))
+
+
+@needs_core
+@pytest.mark.claim("C22")
+def test_pools_are_per_dtype(tmp_path):
+    rng = np.random.default_rng(38)
+    tensors = {
+        **{f"f16.{i:02}": rng.integers(0, 256, 2 * 64, dtype=np.uint8).view(np.float16) for i in range(40)},
+        **{f"f32.{i:02}": rng.integers(0, 256, 4 * 64, dtype=np.uint8).view(np.float32) for i in range(40)},
+    }
+    path = _write(tmp_path / "mixed.safetensors", tensors)
+
+    pooled = [result for result in scan_safetensors(str(path)) if result.name.startswith("pooled small ")]
+
+    assert len(pooled) == 2
+    assert {result.dtype for result in pooled} == {"F16", "F32"}
+    assert all(len(result.pooled_from) == 40 for result in pooled)

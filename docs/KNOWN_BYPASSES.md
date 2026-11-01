@@ -17,9 +17,8 @@ recommended treatment for every supported file, including files with no findings
 |---|---|---|---|
 | Random-looking payload in the lowest mantissa bits (T02) | Not detectable by any static statistic. `aegis disarm` removes it: at the default width the rounded-away bits are zero afterwards, and the payload can move a kept value by at most one rounding step | `test_t02_random_lsb_payload_is_a_documented_blind_spot_and_disarm_removes_it`, `test_default_width_leaves_nothing_of_a_low_bit_payload`, `test_files_disarmed_at_the_default_width_keep_no_low_bit_payload` (claims L01, C09) | Limit by design |
 | Payload in mantissa bits above the disarm width, shaped to stay under every public threshold | Neither detected nor removed. Disarm keeps those bits, because rounding them away costs model quality (docs/disarm_impact.md) | Thresholds in `aegis/thresholds.py`; quality cost per width in docs/disarm_impact.md | Capacity not yet measured (K2) |
-| Payload split across tensors of fewer than 256 elements (T19) | Not flagged: below the sample floor of the exponent-lane rule | Strict xfail `test_t19_payload_split_into_tiny_tensors_is_flagged` (claim L02) | H1 |
+| Payload split across small GGUF tensors (T19) | Not pooled: GGUF tensors are checked one at a time, so each remains below the sample floor of the exponent-lane rule | `aegis/modelformats.py` (`_tensor_stats`) | H1 (safetensors only) |
 | Payload inside packed quantized tensors (GPTQ/AWQ int32, bitsandbytes 4-bit, FP8) | Only the pooled-entropy rule applies, with little margin. Disarm leaves quantized GGUF tensors unchanged and reports them, because their low bits are the weights | docs/calibration.md, proposal P3 | D2 |
-| Small GGUF tensors | GGUF tensors are checked one at a time, so the T19 limit applies to GGUF too | `aegis/modelformats.py` (`_tensor_stats`) | H1 (safetensors first) |
 
 ## Pickle and containers
 

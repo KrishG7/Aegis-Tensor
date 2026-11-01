@@ -47,6 +47,9 @@ pub struct TensorScanResult {
     /// text is for people and may change wording.
     #[pyo3(get)]
     pub rules: Vec<String>,
+    /// Tensor names contributing to a pooled small-tensor result. Empty for individual tensors.
+    #[pyo3(get)]
+    pub pooled_from: Vec<String>,
 }
 
 #[pymethods]
@@ -524,7 +527,32 @@ fn analyze_tensor(
         is_suspicious: !anomaly_reasons.is_empty(),
         rules,
         anomaly_reasons,
+        pooled_from: Vec::new(),
     }
+}
+
+fn analyze_small_tensor_pool(
+    dtype: Dtype,
+    tensors: &[(String, Vec<u8>, usize)],
+    thresholds: Thresholds,
+) -> Option<TensorScanResult> {
+    let num_elements: usize = tensors.iter().map(|(_, _, count)| *count).sum();
+    if num_elements < MIN_LANE_ELEMENTS {
+        return None;
+    }
+
+    let mut data_bytes = Vec::new();
+    for (_, bytes, _) in tensors {
+        data_bytes.extend_from_slice(bytes);
+    }
+    let pooled_from = tensors.iter().map(|(name, _, _)| name.clone()).collect();
+    let name = format!("pooled small {:?} tensors ({})", dtype, tensors.len());
+    let mut result = analyze_tensor(&name, dtype, vec![num_elements], &data_bytes, thresholds);
+    if !result.is_suspicious {
+        return None;
+    }
+    result.pooled_from = pooled_from;
+    Some(result)
 }
 
 /// Zero-copy scan of a .safetensors model file using memory mapping.
@@ -583,7 +611,7 @@ pub fn scan_safetensors(
         exponent_f16: exponent_f16_entropy_threshold,
         plane: plane_floor,
     };
-    let results: Vec<TensorScanResult> = tensor_names
+    let analyzed: Vec<(TensorScanResult, Option<(Dtype, Vec<u8>)>)> = tensor_names
         .par_iter()
         .map(|name| {
             let tensor_view = match tensors.tensor(name) {
@@ -591,35 +619,73 @@ pub fn scan_safetensors(
                 Err(error) => {
                     // An unreadable tensor is never silently dropped: a tampered
                     // tensor is exactly the kind a scanner must not skip.
-                    return TensorScanResult {
-                        name: name.clone(),
-                        dtype: "unknown".to_string(),
-                        shape: Vec::new(),
-                        num_elements: 0,
-                        entropy: 0.0,
-                        benford_mad: 0.0,
-                        lane_entropies: Vec::new(),
-                        exponent_lane_entropy: None,
-                        low_plane_entropy: None,
-                        out_of_range_fraction: None,
-                        is_suspicious: true,
-                        rules: vec!["unreadable".to_string()],
-                        anomaly_reasons: vec![format!(
-                            "Tensor data could not be read ({}) - possible tampering",
-                            error
-                        )],
-                    };
+                    return (
+                        TensorScanResult {
+                            name: name.clone(),
+                            dtype: "unknown".to_string(),
+                            shape: Vec::new(),
+                            num_elements: 0,
+                            entropy: 0.0,
+                            benford_mad: 0.0,
+                            lane_entropies: Vec::new(),
+                            exponent_lane_entropy: None,
+                            low_plane_entropy: None,
+                            out_of_range_fraction: None,
+                            is_suspicious: true,
+                            rules: vec!["unreadable".to_string()],
+                            anomaly_reasons: vec![format!(
+                                "Tensor data could not be read ({}) - possible tampering",
+                                error
+                            )],
+                            pooled_from: Vec::new(),
+                        },
+                        None,
+                    );
                 }
             };
-            analyze_tensor(
-                name,
-                tensor_view.dtype(),
-                tensor_view.shape().to_vec(),
-                tensor_view.data(),
-                thresholds,
-            )
+            let dtype = tensor_view.dtype();
+            let shape = tensor_view.shape().to_vec();
+            let num_elements: usize = shape.iter().product();
+            let small_float_data = if num_elements < MIN_LANE_ELEMENTS
+                && matches!(dtype, Dtype::F32 | Dtype::F16 | Dtype::BF16)
+            {
+                Some((dtype, tensor_view.data().to_vec()))
+            } else {
+                None
+            };
+            let result = analyze_tensor(name, dtype, shape, tensor_view.data(), thresholds);
+            (result, small_float_data)
         })
         .collect();
+
+    let mut results = Vec::new();
+    let mut small_f32 = Vec::new();
+    let mut small_f16 = Vec::new();
+    let mut small_bf16 = Vec::new();
+    for (name, (result, small_float_data)) in tensor_names.iter().cloned().zip(analyzed) {
+        if let Some((dtype, data)) = small_float_data {
+            let entry = (name, data, result.num_elements);
+            match dtype {
+                Dtype::F32 => small_f32.push(entry),
+                Dtype::F16 => small_f16.push(entry),
+                Dtype::BF16 => small_bf16.push(entry),
+                _ => unreachable!("only float tensors are pooled"),
+            }
+        }
+        results.push(result);
+    }
+    for pool in [&mut small_f32, &mut small_f16, &mut small_bf16] {
+        pool.sort_by(|left, right| left.0.cmp(&right.0));
+    }
+    for (dtype, contributors) in [
+        (Dtype::F32, small_f32),
+        (Dtype::F16, small_f16),
+        (Dtype::BF16, small_bf16),
+    ] {
+        if let Some(pooled_result) = analyze_small_tensor_pool(dtype, &contributors, thresholds) {
+            results.push(pooled_result);
+        }
+    }
 
     Ok(results)
 }
@@ -719,6 +785,66 @@ mod tests {
 
         let ones = vec![0xFFu8; 500];
         assert_eq!(shannon_entropy_bytes(&ones), 0.0);
+    }
+
+    #[test]
+    fn test_small_tensor_pool_below_lane_floor_is_not_analyzed() {
+        let count = MIN_LANE_ELEMENTS - 1;
+        let tensors = vec![("small".to_string(), weight_like_f32(count, 7), count)];
+        let thresholds = Thresholds {
+            entropy: 7.92,
+            benford: None,
+            exponent: 6.5,
+            exponent_f16: 7.2,
+            plane: 7.5,
+        };
+
+        assert!(analyze_small_tensor_pool(Dtype::F32, &tensors, thresholds).is_none());
+    }
+
+    #[test]
+    fn test_small_tensor_pool_detects_each_float_dtype_and_keeps_name_order() {
+        let thresholds = Thresholds {
+            entropy: 7.92,
+            benford: None,
+            exponent: 6.5,
+            exponent_f16: 7.2,
+            plane: 7.5,
+        };
+        for (dtype, width) in [(Dtype::F32, 4), (Dtype::F16, 2), (Dtype::BF16, 2)] {
+            let tensors: Vec<(String, Vec<u8>, usize)> = (0..4)
+                .map(|index| {
+                    let name = format!("chunk.{}", index);
+                    let bytes = (0..64usize)
+                        .flat_map(|sample| {
+                            let high_byte = (index * 64 + sample) as u8;
+                            (0..width).map(
+                                move |lane| {
+                                    if lane + 1 == width {
+                                        high_byte
+                                    } else {
+                                        0
+                                    }
+                                },
+                            )
+                        })
+                        .collect();
+                    (name, bytes, 64)
+                })
+                .collect();
+            let result = analyze_small_tensor_pool(dtype, &tensors, thresholds)
+                .expect("random-looking pool should have findings");
+            assert!(result.is_suspicious);
+            assert_eq!(
+                result.pooled_from,
+                vec![
+                    "chunk.0".to_string(),
+                    "chunk.1".to_string(),
+                    "chunk.2".to_string(),
+                    "chunk.3".to_string()
+                ]
+            );
+        }
     }
 
     #[test]

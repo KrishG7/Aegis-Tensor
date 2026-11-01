@@ -42,6 +42,8 @@ Every PR adds a line under Unreleased.
   module level, so `scripts/claims.py` runs without PyTorch (#37).
 
 ### Security
+- Safetensors scans pool small F32, F16 and BF16 tensors by dtype and apply the existing tensor
+  rules once each pool reaches 256 elements. Findings name the contributing tensors.
 - The pickle scanner no longer trusts every `torch.*` and `numpy.*` global. A pickle calling
   `torch.hub.load`, `torch.utils.cpp_extension.load_inline`, `torch.jit`, `torch.ops.load_library`,
   a nested `torch.load`, or a `numpy.testing` helper that runs code used to get no finding; these

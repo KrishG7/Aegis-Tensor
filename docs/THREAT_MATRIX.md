@@ -42,7 +42,7 @@ test documents it · `limit` = detected only in part, with the limit stated · `
 | T04 | Partial overwrite (about 1% of floats) | Targeted tampering | Out-of-range fraction > 0.1% | Tensor name + fraction | `quarantine` | tested |
 | T08 | Clean model | — | No finding on any channel | — | — | tested (no false positives) |
 | T17 | NaN / Inf injection | Inference-breaking tampering | Out-of-range fraction | Tensor name | `quarantine` | tested |
-| T19 | Payload split into tensors under 256 elements | Evasion of the sample floor | Not flagged | — | — | gap (strict xfail) |
+| T19 | Payload split across small safetensors tensors | Evasion of the sample floor | Per-dtype pooled sign/exponent lane and out-of-range rules at 256 combined elements | Names of all contributing tensors | `quarantine` | tested (safetensors only) |
 
 Known limits: the lane rule and the out-of-range rule assume trained weights stay below
 1e4 in magnitude. Tensors with genuinely larger values need a per-model threshold. Partial
@@ -132,7 +132,7 @@ Every known bypass and limit, with its evidence, is listed in [KNOWN_BYPASSES.md
    - The float16 bias-vector false positives were fixed with a float16 exponent-lane threshold of 7.2 (P1).
    - Payloads inside **packed quantized tensors** (GPTQ/AWQ int32, bitsandbytes 4-bit uint8, FP8) are only covered by the pooled-entropy rule, with little margin. A format-aware unpacking rule is needed (proposal P3).
    - Models over 3 GB were not calibrated.
-2. **Sub-256-element tensors** (T19) are not covered. A split-payload attacker can use this.
+2. **Small GGUF tensors** (T19) are still checked one at a time; this change pools only safetensors.
 3. **Trojan treatment.** Detection exists for T15, but there's no fine-prune or retrain step.
 4. **Random low-bit payloads** (T02) are not detectable statically. Only the removal treatment works.
 
