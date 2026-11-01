@@ -1,3 +1,5 @@
+> **Design history.** This document records an earlier plan. For current behaviour see the README, docs/THREAT_MATRIX.md and docs/DECISIONS.md.
+
 # Aegis-Tensor: Technology Stack Specification
 
 Aegis-Tensor combines a systems-level Rust core with an accessible Python ML ecosystem to achieve both bare-metal performance and seamless deep learning framework interoperability.
