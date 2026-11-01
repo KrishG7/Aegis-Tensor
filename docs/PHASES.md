@@ -1,3 +1,5 @@
+> **Design history.** This document records an earlier plan. For current behaviour see the README, docs/THREAT_MATRIX.md and docs/DECISIONS.md.
+
 # Aegis-Tensor: Development Phases & Roadmap
 
 This document outlines the four-phase development lifecycle for the Aegis-Tensor college capstone project.

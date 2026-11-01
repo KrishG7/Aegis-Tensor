@@ -1,3 +1,5 @@
+> **Design history.** This document records an earlier plan. For current behaviour see the README, docs/THREAT_MATRIX.md and docs/DECISIONS.md.
+
 # Aegis-Tensor: Deep Architectural Specification
 
 Aegis-Tensor provides multi-layer inspection of neural network weights by integrating mathematical cryptanalysis with dynamic runtime introspection.

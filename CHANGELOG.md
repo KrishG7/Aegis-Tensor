@@ -10,6 +10,7 @@ backfilled (issue A3).
 ## [Unreleased]
 
 ### Added
+- Design-history banners on six older documents and tests for those banners and README/docs relative links; corrected or removed unverified research citations and figures.
 - docs/KNOWN_BYPASSES.md: every known bypass and limit, with its evidence and where a fix is tracked.
 - Tests of the disarm guarantee at the default width for float32, float16 and bfloat16, in
   safetensors and GGUF files: the rounded-away bits hold nothing afterwards.
