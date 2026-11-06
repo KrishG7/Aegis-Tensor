@@ -21,6 +21,8 @@ Every PR adds a line under Unreleased.
 - Quality gates in CI: ruff, mypy, cargo fmt and clippy, a coverage floor, diff coverage on PRs,
   a wheel smoke test, a no-PyTorch test job, Conventional Commit PR titles and a check that code
   changes come with test changes.
+- Automated release workflow (.github/workflows/release.yml) building and smoke-testing abi3 wheels
+  for Linux x86_64, macOS arm64, macOS x86_64 and sdist on v* tags (#36).
 - Negative tests in `tests/test_claims.py` for each check in `scripts/claims.py`: out-of-date
   README claims, claims without tests, unregistered markers, duplicate IDs and execution without
   optional dependencies (#37).
