@@ -1,25 +1,31 @@
 """Tests for remote model scanning via HTTP range requests (aegis.hub).
 
-Every test replaces `aegis.hub._http_get` with a fake (monkeypatch). No test touches the network
-unless explicitly invoked with `-m network`.
+Every test replaces `aegis.hub._http_get` with a fake (monkeypatch). No test touches the network.
 """
 
 import http.server
 import json
 import struct
 import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
 from safetensors.numpy import save_file
+from typer.testing import CliRunner
 
+from aegis import hub
+from aegis.cli import app
 from aegis.formatscan import scan_safetensors_header
 from aegis.hub import (
     _http_get,
+    fetch_gguf_header,
     fetch_safetensors_header,
     resolve,
     scan_remote_file,
+    scan_remote_repo,
 )
+from tests.test_model_formats import SSTI_TEMPLATE, gguf_bytes
 
 
 def _weights(n=1024):
@@ -51,6 +57,14 @@ def test_resolve_raises_on_http_error(monkeypatch):
     monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (404, b"Not Found"))
     with pytest.raises(ValueError, match="Hugging Face API returned status 404"):
         resolve("nonexistent/model")
+
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (500, b"Server Error"))
+    with pytest.raises(ValueError, match="Hugging Face API returned status 500"):
+        resolve("test-org/model")
+
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (200, b"not-json"))
+    with pytest.raises(ValueError, match="invalid JSON response"):
+        resolve("test-org/model")
 
 
 def test_resolve_raises_clean_message_on_network_error(monkeypatch):
@@ -417,6 +431,16 @@ def test_scan_remote_file_safetensors_and_other(monkeypatch, tmp_path):
     result_other = scan_remote_file("test-org/model", "abc", "README.md")
     assert not result_other.is_suspicious
 
+    result_onnx = scan_remote_file("test-org/model", "abc", "model.onnx")
+    assert result_onnx.is_suspicious
+    assert any(f.channel == "hub_uninspected_format" for f in result_onnx.findings)
+
+    from aegis.hub import parse_hf_target
+
+    repo, rev = parse_hf_target("hf://test-org/test-repo@v1.0")
+    assert repo == "test-org/test-repo"
+    assert rev == "v1.0"
+
 
 def test_http_get_local_server():
     """Verify _http_get execution against a real local socket (no external network)."""
@@ -488,3 +512,278 @@ def test_http_get_read_stall_mid_body():
     assert len(body) > 0
     server.server_close()
     thread.join()
+
+
+def _range_response(data: bytes, headers: dict | None) -> tuple[int, bytes]:
+    range_hdr = (headers or {}).get("Range")
+    if range_hdr and range_hdr.startswith("bytes="):
+        s, _, e = range_hdr[6:].partition("-")
+        return 206, data[int(s) : int(e) + 1 if e else None]
+    return 200, data
+
+
+@pytest.mark.claim("C27")
+def test_gguf_template_injection_found_from_header_only(monkeypatch):
+    """Chat template injection in a GGUF header is detected using only range requests."""
+    gguf_raw = gguf_bytes([("tokenizer.chat_template", SSTI_TEMPLATE)], [])
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: _range_response(gguf_raw, headers))
+
+    result = fetch_gguf_header("org/model", "sha123", "model.gguf")
+    assert result.is_suspicious and result.is_critical
+    assert any(f.code == "gguf_template" and f.severity == "CRITICAL" for f in result.findings)
+    assert any("CVE-2024-34359" in f.message for f in result.findings)
+
+
+@pytest.mark.claim("C27")
+def test_gguf_header_growth_stops_at_cap(monkeypatch):
+    """Range requests grow until reaching the 64 MB cap and refuse to fetch further."""
+    calls = []
+    truncated = b"GGUF" + struct.pack("<IQQ", 3, 0, 1) + struct.pack("<Q", 100_000_000)
+
+    def fake_get(url, headers=None, limit=None):
+        range_hdr = (headers or {}).get("Range", "")
+        calls.append(range_hdr)
+        parts = range_hdr[6:].split("-") if range_hdr.startswith("bytes=") else [0, len(truncated) - 1]
+        start, end = int(parts[0]), int(parts[1])
+        size = end - start + 1
+        prefix = truncated[start : end + 1] if start < len(truncated) else b""
+        return 206, prefix + b"\x00" * (size - len(prefix))
+
+    monkeypatch.setattr("aegis.hub._http_get", fake_get)
+    result = fetch_gguf_header("org/model", "sha123", "huge.gguf")
+    assert result.is_suspicious
+    assert any(f.code == "gguf_malformed" and "64 MB" in f.message for f in result.findings)
+    assert any(f"-{hub.MAX_GGUF_HEADER_BYTES - 1}" in c for c in calls)
+
+
+def test_gguf_network_error_and_range_ignore(monkeypatch):
+    """Network failure and servers ignoring Range header on GGUF return header_unreadable."""
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (0, b"connection refused"))
+    res_net = fetch_gguf_header("org/model", "sha123", "model.gguf")
+    assert res_net.is_suspicious
+    assert any(f.code == "header_unreadable" and "could not reach Hugging Face" in f.message for f in res_net.findings)
+
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (200, b"full-body"))
+    res_200 = fetch_gguf_header("org/model", "sha123", "model.gguf")
+    assert res_200.is_suspicious
+    assert any(f.code == "header_unreadable" and "not supported" in f.message for f in res_200.findings)
+
+
+def test_gguf_malformed_and_eof_handling(monkeypatch):
+    """Non-GGUF files, premature EOF, and truncated chunk are caught and flagged without growing."""
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (206, b"NOT_GGUF_DATA"))
+    assert fetch_gguf_header("org/model", "sha123", "bad.gguf").is_suspicious
+
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (500, b""))
+    assert fetch_gguf_header("org/model", "sha123", "err.gguf").is_suspicious
+
+    # Chunk shorter than fetch_size with truncated error
+    truncated_header = b"GGUF" + struct.pack("<IQQ", 3, 0, 100)
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (206, truncated_header))
+    assert fetch_gguf_header("org/model", "sha123", "short.gguf").is_suspicious
+
+
+@pytest.mark.claim("C28")
+def test_cli_hf_scan_json_validates_against_schema(monkeypatch):
+    """CLI scan of a hf:// repository outputs valid JSON conforming to findings-v1.schema.json."""
+    import jsonschema
+
+    runner = CliRunner()
+    root = Path(__file__).resolve().parent.parent
+    schema_path = root / "docs" / "schema" / "findings-v1.schema.json"
+    findings_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    st_bytes = struct.pack("<Q", 2) + b"{}"
+    gguf_raw = gguf_bytes([("tokenizer.chat_template", SSTI_TEMPLATE)], [])
+    api_payload = {
+        "sha": "1234567890abcdef1234567890abcdef12345678",
+        "siblings": [
+            {"rfilename": "model.safetensors"},
+            {"rfilename": "model.gguf"},
+            {"rfilename": "pytorch_model.bin"},
+            {"rfilename": "modeling_custom.py"},
+        ],
+    }
+
+    def fake_get(url, headers=None, limit=None):
+        if "api/models" in url:
+            return 200, json.dumps(api_payload).encode("utf-8")
+        if "model.safetensors" in url:
+            return _range_response(st_bytes, headers)
+        if "model.gguf" in url:
+            return _range_response(gguf_raw, headers)
+        if "pytorch_model.bin" in url:
+            return 200, b"pickle-binary"
+        return 404, b""
+
+    monkeypatch.setattr("aegis.hub._http_get", fake_get)
+    res = runner.invoke(app, ["scan", "hf://test-org/full-repo", "--format", "json"])
+    assert res.exit_code == 1
+    doc = json.loads(res.stdout)
+
+    validator = jsonschema.Draft202012Validator(
+        findings_schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
+    )
+    validator.validate(doc)
+    assert doc["max_severity"] == "critical"
+    file_paths = [f["path"] for f in doc["files"]]
+    assert any("model.safetensors" in p for p in file_paths)
+    assert any("model.gguf" in p for p in file_paths)
+    assert any("pytorch_model.bin" in p for p in file_paths)
+
+
+@pytest.mark.claim("C28")
+def test_cli_hf_scan_text_modes(monkeypatch):
+    """Text output renders cleanly for remote safetensors, GGUF, pickle, uninspected formats, and repo findings."""
+    runner = CliRunner()
+    st_bytes = struct.pack("<Q", 2) + b"{}"
+    gguf_raw = gguf_bytes([("general.name", "clean")], [])
+    api_payload = {
+        "sha": "1234567890abcdef1234567890abcdef12345678",
+        "siblings": [
+            {"rfilename": "model.safetensors"},
+            {"rfilename": "model.gguf"},
+            {"rfilename": "pytorch_model.bin"},
+            {"rfilename": "model.onnx"},
+            {"rfilename": "modeling_custom.py"},
+        ],
+    }
+
+    def fake_get(url, headers=None, limit=None):
+        if "api/models" in url:
+            return 200, json.dumps(api_payload).encode("utf-8")
+        if "model.safetensors" in url:
+            return _range_response(st_bytes, headers)
+        if "model.gguf" in url:
+            return _range_response(gguf_raw, headers)
+        return 404, b""
+
+    monkeypatch.setattr("aegis.hub._http_get", fake_get)
+
+    res = runner.invoke(app, ["scan", "hf://test-org/multi-repo"])
+    assert res.exit_code == 1
+    assert "Header-only remote inspection (weights not downloaded)" in res.stdout
+    assert "model.safetensors" in res.stdout
+    assert "model.gguf" in res.stdout
+    assert "pytorch_model.bin" in res.stdout
+    assert "model.onnx" in res.stdout
+    assert "REPOSITORY Scan" in res.stdout
+    assert "AEGIS-H005" in res.stdout
+    # Verify no disarm command is recommended for remote files
+    assert "aegis disarm" not in res.stdout
+
+    # With --fail-on critical, exits 0 since only medium findings exist
+    res_crit = runner.invoke(app, ["scan", "hf://test-org/multi-repo", "--fail-on", "critical"])
+    assert res_crit.exit_code == 0
+
+
+@pytest.mark.claim("C28")
+def test_cli_hf_scan_sarif_output(monkeypatch):
+    """SARIF output valid 2.1.0 JSON for remote repository scan."""
+    runner = CliRunner()
+    gguf_raw = gguf_bytes([("tokenizer.chat_template", SSTI_TEMPLATE)], [])
+    api_payload = {
+        "sha": "1234567890abcdef1234567890abcdef12345678",
+        "siblings": [{"rfilename": "model.gguf"}],
+    }
+
+    def fake_get(url, headers=None, limit=None):
+        if "api/models" in url:
+            return 200, json.dumps(api_payload).encode("utf-8")
+        return _range_response(gguf_raw, headers)
+
+    monkeypatch.setattr("aegis.hub._http_get", fake_get)
+    res = runner.invoke(app, ["scan", "hf://test-org/sarif-repo", "--format", "sarif"])
+    assert res.exit_code == 1
+    sarif = json.loads(res.stdout)
+    assert sarif["version"] == "2.1.0"
+    assert len(sarif["runs"][0]["results"]) > 0
+
+
+@pytest.mark.claim("C29")
+def test_cli_hf_scan_uninspected_format(monkeypatch):
+    """Remote files with formats not inspected via range requests are reported with AEGIS-H008."""
+    runner = CliRunner()
+    api_payload = {
+        "sha": "abcdef1234567890abcdef1234567890abcdef12",
+        "siblings": [
+            {"rfilename": "model.onnx"},
+            {"rfilename": "weights.h5"},
+        ],
+    }
+
+    def fake_get(url, headers=None, limit=None):
+        if "api/models" in url:
+            return 200, json.dumps(api_payload).encode("utf-8")
+        return 404, b""
+
+    monkeypatch.setattr("aegis.hub._http_get", fake_get)
+    res = runner.invoke(app, ["scan", "hf://test-org/uninspected-repo", "--format", "json", "--fail-on", "medium"])
+    assert res.exit_code == 1
+    doc = json.loads(res.stdout)
+    assert doc["max_severity"] == "medium"
+    assert len(doc["files"]) == 2
+    for f in doc["files"]:
+        assert any(finding["rule"] == "AEGIS-H008" for finding in f["findings"])
+        assert f["verdict"]["level"] == "suspicious"
+
+
+@pytest.mark.claim("C30")
+def test_cli_hf_scan_trust_remote_code_once_per_repo(monkeypatch):
+    """trust_remote_code is reported once per repository at the repo level, not per file."""
+    runner = CliRunner()
+    st_bytes = struct.pack("<Q", 2) + b"{}"
+    api_payload = {
+        "sha": "abcdef1234567890abcdef1234567890abcdef12",
+        "siblings": [
+            {"rfilename": "model-00001.safetensors"},
+            {"rfilename": "model-00002.safetensors"},
+            {"rfilename": "modeling_custom.py"},
+        ],
+    }
+
+    def fake_get(url, headers=None, limit=None):
+        if "api/models" in url:
+            return 200, json.dumps(api_payload).encode("utf-8")
+        return _range_response(st_bytes, headers)
+
+    monkeypatch.setattr("aegis.hub._http_get", fake_get)
+    res = runner.invoke(app, ["scan", "hf://test-org/custom-code-repo", "--format", "json"])
+    doc = json.loads(res.stdout)
+    all_h005 = [finding for f in doc["files"] for finding in f["findings"] if finding["rule"] == "AEGIS-H005"]
+    # Reported exactly once for the repository
+    assert len(all_h005) == 1
+    # Attached to the repository-level entry
+    repo_entries = [f for f in doc["files"] if f["path"].endswith("@" + api_payload["sha"])]
+    assert len(repo_entries) == 1
+    assert any(finding["rule"] == "AEGIS-H005" for finding in repo_entries[0]["findings"])
+
+
+def test_cli_hf_scan_error_exits_2(monkeypatch):
+    """Network errors and 404 repositories end in exit code 2 with clear messages."""
+    runner = CliRunner()
+
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (404, b"Not Found"))
+    res_404 = runner.invoke(app, ["scan", "hf://nonexistent/repo"])
+    assert res_404.exit_code == 2
+    assert "not found" in res_404.stdout.lower()
+
+    monkeypatch.setattr("aegis.hub._http_get", lambda url, headers=None, limit=None: (0, b"connection reset"))
+    res_net = runner.invoke(app, ["scan", "hf://test-org/network-error-repo"])
+    assert res_net.exit_code == 2
+    assert "could not reach Hugging Face" in res_net.stdout
+
+
+def test_scan_remote_repo_no_model_files_raises(monkeypatch):
+    """Remote repository with no model files raises HubError and exits 2."""
+    runner = CliRunner()
+    payload = {"sha": "abcdef123456", "siblings": [{"rfilename": "README.md"}, {"rfilename": "config.json"}]}
+    monkeypatch.setattr(
+        "aegis.hub._http_get", lambda url, headers=None, limit=None: (200, json.dumps(payload).encode())
+    )
+    with pytest.raises(hub.HubError, match="no model files found in this repository"):
+        scan_remote_repo("hf://test-org/empty-model")
+
+    res = runner.invoke(app, ["scan", "hf://test-org/empty-model"])
+    assert res.exit_code == 2
+    assert "no model files found in this repository" in res.stdout

@@ -122,7 +122,14 @@ def main(
         console.print("[yellow]Use [bold]aegis --help[/bold] to see available commands.[/yellow]")
 
 
-def _treatment_lines(results, header_result, model_path: Path) -> list[str]:
+def _display_path(path_str: str) -> str:
+    """Format file path or hf:// URI for console display."""
+    if path_str.startswith("hf://"):
+        return path_str
+    return str(Path(path_str).resolve())
+
+
+def _treatment_lines(results, header_result, model_path: Any) -> list[str]:
     """Map each kind of finding to the treatment that addresses it.
 
     Only treatments that exist in this tool are recommended. Anything else is
@@ -137,7 +144,20 @@ def _treatment_lines(results, header_result, model_path: Path) -> list[str]:
     ]
     header_sanitize = [f for f in header_result.findings if f.treatment == "sanitize"]
     header_quarantine = [f for f in header_result.findings if f.treatment == "quarantine"]
-    disarm_cmd = f"aegis disarm {model_path} {default_disarm_path(model_path)}"
+    if str(model_path).startswith("hf://"):
+        if structured or header_sanitize:
+            lines.append("• Header payload detected in remote model: do not download or load this checkpoint.")
+        if overwritten or header_quarantine:
+            names = ", ".join(overwritten + [f.where for f in header_quarantine])[:200]
+            lines.append(
+                f"• Overwritten or unreadable tensors ({names}): quarantine. "
+                "Obtain these tensors from the original source."
+            )
+        if lines:
+            lines.append("Do not load this checkpoint until verified.")
+        return lines
+
+    disarm_cmd = f"aegis disarm {model_path} {default_disarm_path(Path(model_path))}"
 
     if structured or header_sanitize:
         flags = " --strip-metadata" if header_sanitize else ""
@@ -283,7 +303,8 @@ def _render_verdict(outcome: dict) -> None:
         body += "\n[dim]If confirmed: report to the platform first, never to the uploader (SECURITY.md).[/dim]"
     elif verdict["disclosure"] == "owner":
         body += "\n[dim]If confirmed: tell the owner privately and suggest a fix (SECURITY.md).[/dim]"
-    console.print(Panel(body, title=f"{icon} Verdict: {Path(outcome['path']).name}", border_style=color))
+    target_name = outcome["path"].split("/")[-1] if outcome["path"].startswith("hf://") else Path(outcome["path"]).name
+    console.print(Panel(body, title=f"{icon} Verdict: {target_name}", border_style=color))
 
 
 def _render_engines(outcome: dict) -> None:
@@ -303,7 +324,7 @@ def _render_engines(outcome: dict) -> None:
 
 def _render_container_text(outcome: dict) -> None:
     result = outcome["container"]
-    console.print(f"[bold]Scanning:[/bold] [cyan]{Path(outcome['path']).resolve()}[/cyan]")
+    console.print(f"[bold]Scanning:[/bold] [cyan]{_display_path(outcome['path'])}[/cyan]")
     table = Table(
         title=f"Aegis-Tensor Container Scan (format: {result.format}, {len(result.globals_seen)} globals referenced)",
         box=box.ROUNDED,
@@ -336,16 +357,21 @@ def _render_container_text(outcome: dict) -> None:
 
 
 def _render_findings_text(outcome: dict) -> None:
-    """Generic text view: one row per finding (used for GGUF, Keras, HDF5 and ONNX)."""
+    """Generic text view: one row per finding (used for GGUF, Keras, HDF5, ONNX, and repository checks)."""
     findings = outcome["findings"]
-    console.print(
-        f"[bold]Scanning:[/bold] [cyan]{Path(outcome['path']).resolve()}[/cyan] "
-        f"[dim](format: {outcome['format']}, {len(outcome['tensors'])} float tensors analysed)[/dim]"
-    )
+    fmt = outcome.get("format")
+    if fmt:
+        dim_info = f"[dim](format: {fmt}, {len(outcome.get('tensors', []))} float tensors analysed)[/dim]"
+        title = f"Aegis-Tensor {fmt.upper()} Scan"
+    else:
+        dim_info = "[dim](repository checks)[/dim]"
+        title = "Aegis-Tensor REPOSITORY Scan"
+
+    console.print(f"[bold]Scanning:[/bold] [cyan]{_display_path(outcome['path'])}[/cyan] {dim_info}")
     if not findings:
         console.print(Panel(f"{get_risk_badge('CLEAN')}\n\nNo findings.", title="✅ Model Clean", border_style="green"))
         return
-    table = Table(title=f"Aegis-Tensor {outcome['format'].upper()} Scan", box=box.ROUNDED, header_style="bold magenta")
+    table = Table(title=title, box=box.ROUNDED, header_style="bold magenta")
     table.add_column("Severity", justify="center")
     table.add_column("Rule")
     table.add_column("Location", style="cyan", overflow="fold")
@@ -358,9 +384,9 @@ def _render_findings_text(outcome: dict) -> None:
 
 
 def _render_safetensors_text(outcome: dict, thresholds: dict) -> None:
-    results, header_result = outcome["tensor_results"], outcome["header"]
-    model_path = Path(outcome["path"])
-    console.print(f"[bold]Scanning:[/bold] [cyan]{model_path.resolve()}[/cyan]")
+    results, header_result = outcome.get("tensor_results", []), outcome["header"]
+    model_path = outcome["path"]
+    console.print(f"[bold]Scanning:[/bold] [cyan]{_display_path(model_path)}[/cyan]")
     benford = thresholds["benford"]
     benford_note = f"Benford MAD > {benford:.4f}" if benford is not None else "Benford off"
     console.print(
@@ -369,48 +395,52 @@ def _render_safetensors_text(outcome: dict, thresholds: dict) -> None:
         f"Low-bit plane < {thresholds['plane']:.2f} | {benford_note}[/dim]\n"
     )
 
-    table = Table(
-        title=f"Aegis-Tensor Static Analysis Report ({len(results)} Tensors)",
-        box=box.ROUNDED,
-        header_style="bold magenta",
-    )
-    table.add_column("Tensor Name", style="cyan", overflow="ellipsis")
-    table.add_column("Dtype", justify="center")
-    table.add_column("Shape", justify="center")
-    table.add_column("Entropy (Bits)", justify="right")
-    table.add_column("Exponent Lane", justify="right")
-    table.add_column("Low-Bit Plane", justify="right")
-    table.add_column("Status", justify="center")
-
     suspicious_count = 0
     structural_count = 0
-    for res in results:
-        if res.is_suspicious:
-            suspicious_count += 1
-            status_text = "[bold red]SUSPICIOUS[/bold red]"
-        else:
-            status_text = "[bold green]CLEAN[/bold green]"
-        if _is_structural(res):
-            structural_count += 1
 
-        entropy_color = "red" if res.entropy > thresholds["entropy"] else "white"
-        lane = res.exponent_lane_entropy
-        lane_limit = thresholds["exponent_f16"] if res.dtype == "F16" else thresholds["exponent"]
-        lane_text = "-" if lane is None else (f"[red]{lane:.4f}[/red]" if lane > lane_limit else f"{lane:.4f}")
-        plane = res.low_plane_entropy
-        plane_text = (
-            "-" if plane is None else (f"[red]{plane:.4f}[/red]" if plane < thresholds["plane"] else f"{plane:.4f}")
+    if results:
+        table = Table(
+            title=f"Aegis-Tensor Static Analysis Report ({len(results)} Tensors)",
+            box=box.ROUNDED,
+            header_style="bold magenta",
         )
-        table.add_row(
-            res.name,
-            res.dtype,
-            str(res.shape),
-            f"[{entropy_color}]{res.entropy:.4f}[/{entropy_color}]",
-            lane_text,
-            plane_text,
-            status_text,
-        )
-    console.print(table)
+        table.add_column("Tensor Name", style="cyan", overflow="ellipsis")
+        table.add_column("Dtype", justify="center")
+        table.add_column("Shape", justify="center")
+        table.add_column("Entropy (Bits)", justify="right")
+        table.add_column("Exponent Lane", justify="right")
+        table.add_column("Low-Bit Plane", justify="right")
+        table.add_column("Status", justify="center")
+
+        for res in results:
+            if res.is_suspicious:
+                suspicious_count += 1
+                status_text = "[bold red]SUSPICIOUS[/bold red]"
+            else:
+                status_text = "[bold green]CLEAN[/bold green]"
+            if _is_structural(res):
+                structural_count += 1
+
+            entropy_color = "red" if res.entropy > thresholds["entropy"] else "white"
+            lane = res.exponent_lane_entropy
+            lane_limit = thresholds["exponent_f16"] if res.dtype == "F16" else thresholds["exponent"]
+            lane_text = "-" if lane is None else (f"[red]{lane:.4f}[/red]" if lane > lane_limit else f"{lane:.4f}")
+            plane = res.low_plane_entropy
+            plane_text = (
+                "-" if plane is None else (f"[red]{plane:.4f}[/red]" if plane < thresholds["plane"] else f"{plane:.4f}")
+            )
+            table.add_row(
+                res.name,
+                res.dtype,
+                str(res.shape),
+                f"[{entropy_color}]{res.entropy:.4f}[/{entropy_color}]",
+                lane_text,
+                plane_text,
+                status_text,
+            )
+        console.print(table)
+    elif str(model_path).startswith("hf://"):
+        console.print("[dim]Header-only remote inspection (weights not downloaded).[/dim]")
 
     if header_result.findings:
         header_table = Table(title="Header Channel Findings", box=box.ROUNDED, header_style="bold magenta")
@@ -442,6 +472,17 @@ def _render_safetensors_text(outcome: dict, thresholds: dict) -> None:
                 border_style="red" if is_critical else "yellow",
             )
         )
+    elif str(model_path).startswith("hf://"):
+        badge = get_risk_badge("CLEAN")
+        console.print(
+            Panel(
+                f"{badge}\n\n"
+                "[bold green]Header inspection clean.[/bold green]\n"
+                "No malicious metadata, credentials, or header channels detected in remote header.",
+                title="✅ Header Clean",
+                border_style="green",
+            )
+        )
     else:
         badge = get_risk_badge("CLEAN")
         console.print(
@@ -458,11 +499,23 @@ def _render_safetensors_text(outcome: dict, thresholds: dict) -> None:
         )
 
 
+def _render_outcome(outcome: dict, thresholds: dict) -> None:
+    if outcome["kind"] == "container":
+        _render_container_text(outcome)
+    elif outcome["kind"] == "format":
+        _render_findings_text(outcome)
+    else:
+        _render_safetensors_text(outcome, thresholds)
+    _render_engines(outcome)
+    _render_verdict(outcome)
+
+
 @app.command(name="scan")
 def scan_command(
-    model_paths: list[Path] = typer.Argument(
+    model_paths: list[str] = typer.Argument(
         ...,
-        help="Model files to scan. Each file's format is read from its bytes, not its extension.",
+        help="Model files to scan or hf://org/repo[@revision] repositories. "
+        "Each file's format is read from its bytes, not its extension.",
     ),
     entropy_threshold: float = typer.Option(
         DEFAULT_THRESHOLDS["entropy"],
@@ -551,36 +604,55 @@ def scan_command(
 
     files: list[dict[str, Any]] = []
     errored = False
-    for index, path in enumerate(model_paths):
-        if text and index:
+    from aegis.hub import HubError, scan_remote_repo
+
+    for target in model_paths:
+        target_str = str(target)
+        if target_str.startswith("hf://"):
+            try:
+                for outcome in scan_remote_repo(target_str):
+                    if text and files:
+                        console.rule()
+                    files.append(outcome)
+                    if text:
+                        _render_outcome(outcome, thresholds)
+            except (HubError, ScanError, ValueError) as e:
+                errored = True
+                fail_entry: dict[str, Any] = {
+                    "path": target_str,
+                    "format": None,
+                    "findings": [],
+                    "error": str(e),
+                    "verdict": file_verdict(target_str, None, [], error=str(e)),
+                }
+                files.append(fail_entry)
+                if text:
+                    console.print(f"[bold red]Scan failed:[/bold red] {e}")
+                    _render_verdict(fail_entry)
+            continue
+
+        path = Path(target)
+        if text and files:
             console.rule()
         try:
             outcome = _scan_file(path, thresholds, engine_names)
         except ScanError as e:
             errored = True
-            files.append(
-                {
-                    "path": str(path),
-                    "format": None,
-                    "findings": [],
-                    "error": str(e),
-                    "verdict": file_verdict(str(path), None, [], error=str(e)),
-                }
-            )
+            fail_entry = {
+                "path": str(path),
+                "format": None,
+                "findings": [],
+                "error": str(e),
+                "verdict": file_verdict(str(path), None, [], error=str(e)),
+            }
+            files.append(fail_entry)
             if text:
                 console.print(f"[bold red]Scan failed:[/bold red] {e}")
-                _render_verdict(files[-1])
+                _render_verdict(fail_entry)
             continue
         files.append(outcome)
         if text:
-            if outcome["kind"] == "container":
-                _render_container_text(outcome)
-            elif outcome["kind"] == "format":
-                _render_findings_text(outcome)
-            else:
-                _render_safetensors_text(outcome, thresholds)
-            _render_engines(outcome)
-            _render_verdict(outcome)
+            _render_outcome(outcome, thresholds)
 
     document = to_json_document(files, fail_on.value, __version__)
     if output_format == OutputFormat.json:
