@@ -1,3 +1,5 @@
+> **Design history.** This document records an earlier plan. For current behaviour see the README, docs/THREAT_MATRIX.md and docs/DECISIONS.md.
+
 # Engineering Design & Decision Rationale: Issue #7
 
 **Subsystem:** Command Line Interface & Terminal UX  

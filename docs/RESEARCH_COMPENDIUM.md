@@ -19,8 +19,8 @@ This compendium provides an exhaustive mathematical, empirical, and architectura
 1. [Taxonomy of AI Model Supply-Chain Vulnerabilities](#1-taxonomy-of-ai-model-supply-chain-vulnerabilities)
 2. [Part I: Neural Network Steganography & Stegomalware](#2-part-i-neural-network-steganography--stegomalware)
    - 2.1 [IEEE 754 Floating-Point Parameter Anatomy](#21-ieee-754-floating-point-parameter-anatomy)
-   - 2.2 [Literature Survey: EvilModel, StegoNet, and MalDNet](#22-literature-survey-evilmodel-stegonet-and-maldnet)
-   - 2.3 [Empirical Payload Capacity & Evasion Metrics](#23-empirical-payload-capacity--evasion-metrics)
+   - 2.2 [Literature Survey: EvilModel and StegoNet](#22-literature-survey-evilmodel-and-stegonet)
+   - 2.3 [Scope of the cited evidence](#23-scope-of-the-cited-evidence)
    - 2.4 [Mathematical Detection Heuristics](#24-mathematical-detection-heuristics)
      - 2.4.1 [Shannon Information Entropy & Kolmogorov Randomness](#241-shannon-information-entropy--kolmogorov-randomness)
      - 2.4.2 [Bit-Plane Slicing & Mantissa Entropy Divergence](#242-bit-plane-slicing--mantissa-entropy-divergence)
@@ -89,34 +89,23 @@ By substituting the lowest 2 to 4 bits of the 23-bit mantissa ($m_3, m_2, m_1, m
 
 ---
 
-### 2.2 Literature Survey: EvilModel, StegoNet, and MalDNet
+### 2.2 Literature Survey: EvilModel and StegoNet
 
-#### 1. EvilModel (Wang et al., 2021 / 2022)
-*Citation:* Wang, Z., Liu, C., & Cui, X. (2021). *"EvilModel: Hiding Malware Inside of Neural Network Models."* arXiv:2107.08415 / IEEE Transactions on Reliability.
+#### 1. EvilModel (Wang et al., 2021)
+*Citation:* Z. Wang, C.-G. Liu, and X. Cui, "EvilModel: Hiding Malware Inside of Neural Network Models," *2021 IEEE Symposium on Computers and Communications (ISCC)*, pp. 1–7, 2021. [DOI: 10.1109/ISCC53001.2021.9631425](https://doi.org/10.1109/ISCC53001.2021.9631425); [arXiv:2107.08590](https://arxiv.org/abs/2107.08590).
 
-- **Methodology:** Demonstrated injection of full malware binaries into convolutional and fully-connected weight matrices using Least Significant Bit (LSB) substitution.
-- **Key Finding:** In AlexNet (61 million parameters, ~178 MB file size), the authors successfully embedded **36.9 MB of malware** (over 20% of the entire model size) with **less than 1% degradation in top-1 ImageNet accuracy**.
-- **AV Evasion:** Submitted infected models to **VirusTotal**; all **58 commercial antivirus scanners** rated the model as 100% clean.
+- **Reported result (Abstract, p. 1):** The authors report embedding **36.9 MB of malware** in a **178 MB AlexNet model** with **less than 1% accuracy loss**. The abstract also reports that VirusTotal antivirus engines raised no suspicion, but does not state a count of engines.
 
 #### 2. StegoNet (Liu et al., ACSAC 2020)
-*Citation:* Liu, C., et al. (2020). *"StegoNet: Turn Deep Neural Network into a Stegomalware."* Annual Computer Security Applications Conference (ACSAC).
+*Citation:* T. Liu, Z. Liu, Q. Liu, W.-J. Wen, W.-Y. Xu, and M. Li, "StegoNet: Turn Deep Neural Network into a Stegomalware," *Annual Computer Security Applications Conference (ACSAC)*, pp. 928–938, 2020. [DOI: 10.1145/3427228.3427268](https://doi.org/10.1145/3427228.3427268).
 
-- **Methodology:** Proposed four embedding techniques: LSB substitution, parameter pruning substitution, resilient training (fine-tuning the network while clamping payload bits), and sign-bit encoding.
-- **Key Finding:** Resilient training enables embedded payloads to survive transfer learning and quantization.
+- **Reported methods (Abstract, p. 928):** The abstract lists four payload-injection methods: LSB substitution, resilience training, value mapping, and sign-mapping. It describes no accuracy degradation; the claims about survival through transfer learning and quantization are not retained because the source abstract does not support them.
 
-#### 3. MalDNet (Kim et al., 2022)
-- Highlighted that modern large language models (LLMs) with billions of parameters (e.g. 7B, 13B, 70B) offer gigabytes of covert capacity, sufficient to hide entire operating system images or multi-stage C2 frameworks.
+### 2.3 Scope of the cited evidence
 
----
-
-### 2.3 Empirical Payload Capacity & Evasion Metrics
-
-| Model Architecture | Parameter Count | File Size (FP32) | Theoretical LSB Capacity (2 bits/weight) | Observed Accuracy Drop | VirusTotal Detection Rate |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **AlexNet** | 61.1M | ~244 MB | ~15.2 MB | $< 0.8\%$ | **0 / 58 (0%)** |
-| **ResNet-50** | 25.6M | ~102 MB | ~6.4 MB | $< 0.3\%$ | **0 / 58 (0%)** |
-| **BERT-Base** | 110M | ~440 MB | ~27.5 MB | $< 0.1\%$ | **0 / 58 (0%)** |
-| **Llama-3-8B** | 8.0B | ~16.0 GB (FP16) | ~1.0 GB | $< 0.05\%$ | **0 / 58 (0%)** |
+The cited EvilModel experiment reports the AlexNet result above. It does not substantiate
+comparative accuracy or VirusTotal detection results for ResNet-50, BERT, or Llama 3, so those
+previously listed figures have been removed.
 
 ---
 
@@ -382,10 +371,10 @@ On an 8-core CPU, scanning achieves an empirical **$\sim 6.8\times$ speedup** ov
 
 ## 6. Comprehensive Academic Bibliography
 
-1. **Wang, Z., Liu, C., & Cui, X. (2021).** *"EvilModel: Hiding Malware Inside of Neural Network Models."* arXiv preprint arXiv:2107.08415. [https://arxiv.org/abs/2107.08415](https://arxiv.org/abs/2107.08415)
+1. **Wang, Z., Liu, C.-G., & Cui, X. (2021).** *"EvilModel: Hiding Malware Inside of Neural Network Models."* In *2021 IEEE Symposium on Computers and Communications (ISCC)*, pp. 1–7. [doi:10.1109/ISCC53001.2021.9631425](https://doi.org/10.1109/ISCC53001.2021.9631425). Preprint: [arXiv:2107.08590](https://arxiv.org/abs/2107.08590).
 2. **Hubinger, E., Denison, C., Mu, J., Lambert, M., Megill, C., et al. (2024).** *"Sleeper Agents: Training Deceptive LLMs that Persist Through Safety Training."* Anthropic & Redwood Research. arXiv preprint arXiv:2401.05566. [https://arxiv.org/abs/2401.05566](https://arxiv.org/abs/2401.05566)
 3. **Wang, B., Yao, Y., Shan, S., Li, H., Viswanath, B., Zheng, H., & Zhao, B. Y. (2019).** *"Neural Cleanse: Identifying and Mitigating Backdoor Attacks in Neural Networks."* In *2019 IEEE Symposium on Security and Privacy (S&P)*, pp. 707-723. IEEE.
-4. **Liu, C., Wang, Z., Cui, X., Qing, J., & Jiang, H. (2020).** *"StegoNet: Turn Deep Neural Network into a Stegomalware."* In *Proceedings of the 36th Annual Computer Security Applications Conference (ACSAC)*, pp. 928-938.
+4. **Liu, T., Liu, Z., Liu, Q., Wen, W.-J., Xu, W.-Y., & Li, M. (2020).** *"StegoNet: Turn Deep Neural Network into a Stegomalware."* In *Proceedings of the Annual Computer Security Applications Conference (ACSAC)*, pp. 928–938. [doi:10.1145/3427228.3427268](https://doi.org/10.1145/3427228.3427268).
 5. **Tran, B., Li, J., & Madry, A. (2018).** *"Spectral Signatures in Backdoor Attacks."* In *Advances in Neural Information Processing Systems (NeurIPS)*, 31, pp. 8000-8010.
 6. **Shannon, C. E. (1948).** *"A Mathematical Theory of Communication."* *The Bell System Technical Journal*, 27(3), pp. 379-423.
 7. **Benford, F. (1938).** *"The Law of Anomalous Numbers."* *Proceedings of the American Philosophical Society*, 78(4), pp. 551-572.

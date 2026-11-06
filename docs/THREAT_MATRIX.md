@@ -36,7 +36,7 @@ test documents it · `limit` = detected only in part, with the limit stated · `
 
 | ID | Threat | Precedent | Detected by | Pinpoints | Treatment | Status |
 |---|---|---|---|---|---|---|
-| T01 | Structured payload in low mantissa bits (text or code) | EvilModel, StegoNet (LSB) | Low-bit plane entropy < 7.5 | Tensor name | `disarm` | tested |
+| T01 | Structured payload in low mantissa bits (text or code) | [EvilModel](https://doi.org/10.1109/ISCC53001.2021.9631425), [StegoNet](https://doi.org/10.1145/3427228.3427268) (LSB) | Low-bit plane entropy < 7.5 | Tensor name | `disarm` | tested |
 | T02 | Random payload in low mantissa bits | MaleficNet-style encrypted payloads | Not statically separable from trained weights | — | `disarm` (removes it) | limit |
 | T03 | Whole tensor overwritten with random bytes | Naive encrypted-blob injection | Sign/exponent lane entropy > 6.5 (float32, bfloat16) or > 7.2 (float16), pooled entropy | Tensor name | `quarantine` | tested |
 | T04 | Partial overwrite (about 1% of floats) | Targeted tampering | Out-of-range fraction > 0.1% | Tensor name + fraction | `quarantine` | tested |
@@ -138,11 +138,15 @@ Every known bypass and limit, with its evidence, is listed in [KNOWN_BYPASSES.md
 
 ## Precedents
 
-Checked against sources during the literature review: MaleficNet, nullifAI, the Anthropic probes, and Goldwasser et al.
-Taken from the project compendium and not yet re-checked: EvilModel and StegoNet, whose
-figures should be verified before they are cited. BadNets is cited from general knowledge.
+EvilModel and StegoNet have been checked against their publication records and abstracts. The
+EvilModel preprint is arXiv:2107.08590 (not arXiv:2107.08415); the conference paper is in the
+2021 IEEE Symposium on Computers and Communications (ISCC). StegoNet is the ACSAC 2020 paper,
+pp. 928–938, DOI 10.1145/3427228.3427268. The specific results cited in the compendium are
+limited to those stated in the papers' abstracts. MalDNet (Kim et al., 2022) could not be located
+and is no longer cited. BadNets is cited from general knowledge.
 
-- EvilModel (2021) and StegoNet (ACSAC 2020) for LSB embedding in weights.
+- [EvilModel](https://doi.org/10.1109/ISCC53001.2021.9631425) and
+  [StegoNet](https://doi.org/10.1145/3427228.3427268) for LSB embedding in weights.
 - MaleficNet (arXiv 2403.03593) for spread-spectrum payloads.
 - ReversingLabs report on nullifAI (Feb 2025) for broken-pickle evasion of picklescan.
 - BadNets (2017) and trojaning attacks for trigger-based backdoors.
