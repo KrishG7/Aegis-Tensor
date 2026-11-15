@@ -402,6 +402,47 @@ class DiskFull(RuntimeError):
     """Raised before a download that would not fit; the run stops instead of filling the disk."""
 
 
+def is_unresolved(record: dict) -> bool:
+    """True if the repo could not be scanned because of an error (download, network, parse).
+
+    Records written before this field existed stored such errors as "skipped: error: ...";
+    they count as unresolved too, so the next run retries them.
+    """
+    return bool(record.get("unresolved")) or str(record.get("skipped") or "").startswith("error:")
+
+
+def carry_over(results: list[dict], current: str) -> list[dict]:
+    """Records kept from an earlier run: scans made under the current rules and real skips.
+
+    Unresolved records are never kept, so every run retries them.
+    """
+    return [r for r in results if not is_unresolved(r) and (r.get("fingerprint") == current or r.get("skipped"))]
+
+
+def scan_job(api, kind: str, repo: str, extra: str, sha: str, cache: Path, max_gb: float, evict: bool) -> dict:
+    """Scan one repo. An error comes back as an unresolved record, never as a skip.
+
+    "skipped" is for repos with nothing to scan at the pinned revision. A download or network
+    error must not shrink the denominator without showing up in the report.
+    """
+    try:
+        if kind == "safetensors":
+            return scan_repo(api, repo, extra, sha, cache, max_gb, evict)
+        return scan_gguf_repo(api, repo, extra, sha, cache, evict, kind == "gguf_header")
+    except DiskFull:
+        raise
+    except Exception as error:
+        return {
+            "repo": repo,
+            "family": extra if kind == "safetensors" else "gguf",
+            "kind": kind,
+            "sha": sha,
+            "files": [],
+            "file": None if kind == "safetensors" else extra,
+            "unresolved": f"{type(error).__name__}: {str(error)[:160]}",
+        }
+
+
 # --- Aggregation and report ----------------------------------------------------------
 
 RULES = ("pooled_entropy", "exponent_lane", "out_of_range", "low_plane", "unreadable")
@@ -457,6 +498,7 @@ def summary(results: list[dict]) -> dict:
             "tensors": sum(o["tensors"] for o in outcomes),
             "flagged": sum(1 for o in outcomes if o["worst"] is not None),
             "flagged_high": sum(1 for o in outcomes if o["worst"] in ("high", "critical")),
+            "unresolved": sum(1 for r in results if is_unresolved(r) and _group(r) == group),
             "fingerprints": sorted({r.get("fingerprint") for r in records}, key=str),
         }
     templates = [r for r in results if r.get("files") and r.get("kind") in ("gguf", "gguf_header")]
@@ -468,6 +510,7 @@ def summary(results: list[dict]) -> dict:
         "templates": sum(len(r["files"][0].get("templates") or {}) for r in templates),
         "flagged_files": len({f["where"].split(":")[0] for f in template_findings}),
         "critical": sum(1 for f in template_findings if f["severity"] == "critical"),
+        "unresolved": sum(1 for r in results if is_unresolved(r) and r.get("kind") in ("gguf", "gguf_header")),
         "fingerprints": sorted({r.get("fingerprint") for r in templates}, key=str),
     }
     return out
@@ -492,8 +535,11 @@ def _quantiles(values: list[float]) -> str:
 
 def render_report(results: list[dict], lock: dict) -> str:
     scanned = [r for r in results if r.get("files")]
-    skipped = [r for r in results if not r.get("files")]
+    skipped = [r for r in results if not r.get("files") and not is_unresolved(r)]
     unresolved = {repo: v["error"] for repo, v in lock.items() if v.get("sha") is None}
+    for record in results:
+        if is_unresolved(record):
+            unresolved[record["repo"]] = record.get("unresolved") or str(record["skipped"]).removeprefix("error: ")
     tensor_records = [r for r in scanned if r.get("kind", "safetensors") in ("safetensors", "gguf")]
 
     by_dtype = defaultdict(lambda: {"tensors": 0, **{rule: 0 for rule in RULES}})
@@ -628,7 +674,7 @@ def render_report(results: list[dict], lock: dict) -> str:
         for record in skipped:
             lines.append(f"- `{record['repo']}`: {record['skipped']}")
         for repo, error in sorted(unresolved.items()):
-            lines.append(f"- `{repo}`: could not resolve ({error})")
+            lines.append(f"- `{repo}`: could not scan ({error})")
     lines += ["", "## Proposals", "", PROPOSALS_START, "_Not written yet._", PROPOSALS_END, ""]
     return "\n".join(lines)
 
@@ -668,7 +714,7 @@ def main() -> int:
     lock = resolve_lock(api, args.refresh_lock) if not args.report_only else json.loads(LOCK_PATH.read_text())
     current = scan_fingerprint()
     results = json.loads(RESULTS_PATH.read_text()) if RESULTS_PATH.exists() else []
-    results = [r for r in results if r.get("fingerprint") == current or r.get("skipped")]  # stale rules: rescan
+    results = carry_over(results, current)  # stale rules and unresolved records are rescanned
     done = {record_key(r) for r in results}
 
     jobs = (
@@ -690,23 +736,10 @@ def main() -> int:
             sha = lock[repo]["sha"]
             print(f"[{index}/{len(jobs)}] {kind} {repo}" + (f" {extra}" if kind != "safetensors" else ""), flush=True)
             try:
-                if kind == "safetensors":
-                    record = scan_repo(api, repo, extra, sha, args.cache_dir, args.max_gb, args.evict)
-                else:
-                    record = scan_gguf_repo(api, repo, extra, sha, args.cache_dir, args.evict, kind == "gguf_header")
+                record = scan_job(api, kind, repo, extra, sha, args.cache_dir, args.max_gb, args.evict)
             except DiskFull as error:
                 print(f"stopping: {error}. Free space or pass --evict, then re-run to resume.", flush=True)
                 break
-            except Exception as error:
-                record = {
-                    "repo": repo,
-                    "family": extra if kind == "safetensors" else "gguf",
-                    "kind": kind,
-                    "sha": sha,
-                    "files": [],
-                    "file": None if kind == "safetensors" else extra,
-                    "skipped": f"error: {type(error).__name__}: {str(error)[:160]}",
-                }
             record["fingerprint"] = current
             results = [r for r in results if record_key(r) != record_key(record)] + [record]
             done.add(record_key(record))
