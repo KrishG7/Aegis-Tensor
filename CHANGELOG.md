@@ -9,6 +9,7 @@ Every PR adds a line under Unreleased.
 ## [Unreleased]
 
 ### Changed
+- Calibration (`benchmarks/calibrate.py`): a download or network error now makes a repo unresolved and is shown in the report and in `summary()`; before, it was logged as skipped and the report said `unresolved: 0`. Unresolved repos are retried on every run, and "skipped" now means only that the repo has nothing to scan at the pinned revision (#48).
 - float16 tensors use their own exponent-lane threshold, 7.2 (`--exponent-threshold-f16`); float32
   and bfloat16 keep 6.5. This clears the 37 float16 attention-bias false positives found in
   calibration (docs/calibration.md, P1). The low-plane floor stays at 7.5, and the one DETR tensor
