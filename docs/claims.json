@@ -109,6 +109,10 @@
       "text": "Flags a pickle that calls a callable built at runtime (the result of another call), even through the memo, and scans pickles embedded in PyTorch storages."
     },
     {
+      "id": "C22",
+      "text": "For safetensors, pools F32, F16 and BF16 tensors under 256 elements by dtype when their combined pool reaches 256 elements, and names the contributing tensors in findings."
+    },
+    {
       "id": "C23",
       "text": "Remote safetensors model inspection fetches only the header using exactly two HTTP range requests (the 8-byte length prefix and the header bytes)."
     },
@@ -148,7 +152,7 @@
     {
       "id": "L02",
       "kind": "limit",
-      "text": "Payloads split across tensors of fewer than 256 elements are not detected."
+      "text": "Payloads split across GGUF tensors of fewer than 256 elements are not detected. Small tensors are pooled for safetensors only."
     }
   ]
 }
