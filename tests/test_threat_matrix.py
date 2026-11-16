@@ -330,6 +330,21 @@ def test_t19_payload_split_into_tiny_tensors_is_flagged(tmp_path):
 
 
 @needs_core
+@pytest.mark.claim("L02")
+@pytest.mark.xfail(strict=True, reason="known gap L02: small GGUF tensors are not pooled (H1 pools safetensors only)")
+def test_t19_payload_split_into_tiny_gguf_tensors_is_flagged(tmp_path):
+    from tests.test_model_formats import gguf_bytes
+
+    rng = np.random.default_rng(19)
+    tiny = {f"chunk.{i}": rng.integers(0, 256, 4 * 64, dtype=np.uint8).view(np.float32) for i in range(64)}
+    path = tmp_path / "m.gguf"
+    path.write_bytes(gguf_bytes([("general.alignment", 32)], [(n, [t.size], 0, t.tobytes()) for n, t in tiny.items()]))
+
+    result = CliRunner().invoke(app, ["scan", str(path), "--format", "json"])
+    assert result.exit_code == 1, result.output
+
+
+@needs_core
 @pytest.mark.claim("C22")
 def test_pooled_finding_names_every_contributing_tensor(tmp_path):
     rng = np.random.default_rng(19)
