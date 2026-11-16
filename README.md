@@ -60,7 +60,7 @@ capability that cannot be tested is not listed.
 | C29 | Remote model files whose formats cannot be inspected via range requests (such as ONNX, Keras, HDF5, numpy arrays, and archives) are reported as uninspected without downloading. | [`test_cli_hf_scan_uninspected_format`](tests/test_hub.py) |
 | C30 | Remote repository inspection detects trust_remote_code=True requirements once per repository without downloading weights. | [`test_cli_hf_scan_trust_remote_code_once_per_repo`](tests/test_hub.py) |
 | L01 | **Known limit:** Random bits hidden in the low mantissa bits cannot be detected by any static statistic. Only `aegis disarm` removes them. | [`test_t02_random_lsb_payload_is_a_documented_blind_spot_and_disarm_removes_it`](tests/test_threat_matrix.py) |
-| L02 | **Known limit:** Payloads split across GGUF tensors of fewer than 256 elements are not detected. Small tensors are pooled for safetensors only. | [`test_t19_payload_split_into_tiny_gguf_tensors_is_flagged`](tests/test_threat_matrix.py) |
+| L03 | **Known limit:** Payloads split across GGUF tensors of fewer than 256 elements are not detected. Small tensors are pooled for safetensors only. | [`test_t19_payload_split_into_tiny_gguf_tensors_is_flagged`](tests/test_threat_matrix.py) |
 
 <!-- claims:end -->
 

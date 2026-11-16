@@ -150,7 +150,7 @@
       "text": "Random bits hidden in the low mantissa bits cannot be detected by any static statistic. Only `aegis disarm` removes them."
     },
     {
-      "id": "L02",
+      "id": "L03",
       "kind": "limit",
       "text": "Payloads split across GGUF tensors of fewer than 256 elements are not detected. Small tensors are pooled for safetensors only."
     }

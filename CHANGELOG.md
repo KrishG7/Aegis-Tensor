@@ -45,7 +45,7 @@ Every PR adds a line under Unreleased.
 ### Security
 - Safetensors scans pool small F32, F16 and BF16 tensors by dtype and apply the existing tensor
   rules once each pool reaches 256 elements. Findings name the contributing tensors. Small GGUF
-  tensors are not pooled yet: a known limit (L02) with a strict-xfail test (#38).
+  tensors are not pooled yet: a known limit (L03) with a strict-xfail test (#38).
 - The pickle scanner no longer trusts every `torch.*` and `numpy.*` global. A pickle calling
   `torch.hub.load`, `torch.utils.cpp_extension.load_inline`, `torch.jit`, `torch.ops.load_library`,
   a nested `torch.load`, or a `numpy.testing` helper that runs code used to get no finding; these
