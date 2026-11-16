@@ -330,8 +330,8 @@ def test_t19_payload_split_into_tiny_tensors_is_flagged(tmp_path):
 
 
 @needs_core
-@pytest.mark.claim("L02")
-@pytest.mark.xfail(strict=True, reason="known gap L02: small GGUF tensors are not pooled (H1 pools safetensors only)")
+@pytest.mark.claim("L03")
+@pytest.mark.xfail(strict=True, reason="known gap L03: small GGUF tensors are not pooled (H1 pools safetensors only)")
 def test_t19_payload_split_into_tiny_gguf_tensors_is_flagged(tmp_path):
     from tests.test_model_formats import gguf_bytes
 
