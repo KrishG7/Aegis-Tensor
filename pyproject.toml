@@ -52,9 +52,13 @@ dev = [
     "pyyaml>=6.0",               # parses workflow YAML in release tests
 ]
 # Optional engines folded into the Aegis verdict (aegis/engines.py).
+# Fickling 0.1.12 imports typing_extensions without declaring it; 0.1.13 declares it but needs
+# Python 3.11+. ModelScan has no release for Python 3.13+, so it is skipped there.
 engines = [
-    "fickling>=0.1.12",
-    "modelscan>=0.8",
+    "fickling>=0.1.13; python_version >= '3.11'",
+    "fickling>=0.1.12; python_version < '3.11'",
+    "typing_extensions>=4.6; python_version < '3.11'",
+    "modelscan>=0.8; python_version < '3.13'",
 ]
 # Benchmarks in benchmarks/. backdoor_eval.py also needs tensorflow (Python 3.12 or older).
 bench = [

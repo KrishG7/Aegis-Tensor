@@ -66,6 +66,12 @@ Every PR adds a line under Unreleased.
 ### Fixed
 - `aegis fuzz` refuses an unsupported file before asking for PyTorch.
 - `fuzz_model` raises a clear error when given neither an input shape nor a vocabulary size.
+- The `engines` extra installs on every supported Python: Fickling 0.1.12 gets the
+  `typing_extensions` it imports on Python 3.10, 3.11+ gets Fickling 0.1.13, and ModelScan is
+  skipped on Python 3.13+, where it has no release. The README says which engines install where,
+  how to install PyTorch and `transformers` for fuzzing, and that `--hf-config` is broken (#58) (#39).
+- Research citations match their sources: EvilModel's "within 1% accuracy loss", StegoNet's
+  "no service quality degradation", and a BadNets reference (arXiv:1708.06733) (#39).
 
 ## [0.1.0] - unreleased
 
