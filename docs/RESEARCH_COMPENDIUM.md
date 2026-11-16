@@ -94,12 +94,12 @@ By substituting the lowest 2 to 4 bits of the 23-bit mantissa ($m_3, m_2, m_1, m
 #### 1. EvilModel (Wang et al., 2021)
 *Citation:* Z. Wang, C.-G. Liu, and X. Cui, "EvilModel: Hiding Malware Inside of Neural Network Models," *2021 IEEE Symposium on Computers and Communications (ISCC)*, pp. 1–7, 2021. [DOI: 10.1109/ISCC53001.2021.9631425](https://doi.org/10.1109/ISCC53001.2021.9631425); [arXiv:2107.08590](https://arxiv.org/abs/2107.08590).
 
-- **Reported result (Abstract, p. 1):** The authors report embedding **36.9 MB of malware** in a **178 MB AlexNet model** with **less than 1% accuracy loss**. The abstract also reports that VirusTotal antivirus engines raised no suspicion, but does not state a count of engines.
+- **Reported result (Abstract, p. 1):** The authors report embedding **36.9 MB of malware** in a **178 MB AlexNet model** **within 1% accuracy loss** (the abstract's wording). The abstract also reports that VirusTotal antivirus engines raised no suspicion, but does not state a count of engines.
 
 #### 2. StegoNet (Liu et al., ACSAC 2020)
 *Citation:* T. Liu, Z. Liu, Q. Liu, W.-J. Wen, W.-Y. Xu, and M. Li, "StegoNet: Turn Deep Neural Network into a Stegomalware," *Annual Computer Security Applications Conference (ACSAC)*, pp. 928–938, 2020. [DOI: 10.1145/3427228.3427268](https://doi.org/10.1145/3427228.3427268).
 
-- **Reported methods (Abstract, p. 928):** The abstract lists four payload-injection methods: LSB substitution, resilience training, value mapping, and sign-mapping. It describes no accuracy degradation; the claims about survival through transfer learning and quantization are not retained because the source abstract does not support them.
+- **Reported methods (Abstract, p. 928):** The abstract lists four payload-injection methods: LSB substitution, resilience training, value mapping, and sign-mapping. It states that the payloads are injected "with no service quality degradation (i.e. accuracy)". The claims about survival through transfer learning and quantization are not retained because the source abstract does not support them.
 
 ### 2.3 Scope of the cited evidence
 

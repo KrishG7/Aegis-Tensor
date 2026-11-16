@@ -144,13 +144,13 @@ EvilModel preprint is arXiv:2107.08590 (not arXiv:2107.08415); the conference pa
 2021 IEEE Symposium on Computers and Communications (ISCC). StegoNet is the ACSAC 2020 paper,
 pp. 928–938, DOI 10.1145/3427228.3427268. The specific results cited in the compendium are
 limited to those stated in the papers' abstracts. MalDNet (Kim et al., 2022) could not be located
-and is no longer cited. BadNets is cited from general knowledge.
+and is no longer cited. BadNets is Gu, Dolan-Gavitt and Garg, arXiv:1708.06733 (2017).
 
 - [EvilModel](https://doi.org/10.1109/ISCC53001.2021.9631425) and
   [StegoNet](https://doi.org/10.1145/3427228.3427268) for LSB embedding in weights.
 - MaleficNet (arXiv 2403.03593) for spread-spectrum payloads.
 - ReversingLabs report on nullifAI (Feb 2025) for broken-pickle evasion of picklescan.
-- BadNets (2017) and trojaning attacks for trigger-based backdoors.
+- [BadNets](https://arxiv.org/abs/1708.06733) (2017) and trojaning attacks for trigger-based backdoors.
 - Anthropic, "Sleeper Agents" (2024), and the linear defection probes that followed.
 - Goldwasser et al. (FOCS 2022) on undetectable backdoors, and the STOC 2025 oblivious-defense follow-up.
 

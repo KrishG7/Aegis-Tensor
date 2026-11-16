@@ -80,6 +80,9 @@ pip install -e ".[engines]"        # optional: Fickling and ModelScan as extra e
 aegis doctor
 ```
 
+Both engines install on Python 3.10–3.12. ModelScan has no release for Python 3.13 or newer, so
+there the `engines` extra installs Fickling only.
+
 ## Scanning
 
 ```bash
@@ -170,6 +173,13 @@ a leaked key, go privately to the owner. [SECURITY.md](SECURITY.md) has the full
 
 ## Backdoor fuzzing
 
+Fuzzing needs PyTorch, and `--hf-config` also needs Hugging Face `transformers`:
+
+```bash
+pip install -e ".[fuzzer]"         # PyTorch
+pip install transformers           # only for --hf-config
+```
+
 ```bash
 aegis fuzz model.safetensors --hf-config bert-base-uncased                    # architecture from a HF config
 aegis fuzz model.safetensors --arch mypkg.models:Net --input-shape 1,3,32,32    # your own class
@@ -179,6 +189,10 @@ aegis fuzz untrusted.pt --trust-pickle --input-shape 1,10                     # 
 Weights are loaded from safetensors into an architecture you trust, so no code from the file runs.
 `--trust-pickle` unpickles inside a sandboxed subprocess. Residual risk is in
 [docs/FUZZ_SAFETY.md](docs/FUZZ_SAFETY.md).
+
+**Known issue:** `--hf-config` currently fails with "has no attribute 'from_config'" for configs
+that name an architecture, which is most of them ([#58](https://github.com/KrishG7/Aegis-Tensor/issues/58)).
+`--arch` and `--trust-pickle` work.
 
 ## Out of scope
 
