@@ -94,3 +94,21 @@ def test_clean_scans_and_real_skips_are_carried_over():
     stale = {"repo": "c/d", "kind": "safetensors", "files": [{}], "fingerprint": "old"}
     skip = {"repo": "e/f", "kind": "safetensors", "files": [], "skipped": "no .safetensors files at this revision"}
     assert calibrate.carry_over([scanned, stale, skip], current="f1") == [scanned, skip]
+
+
+def _gguf_unresolved(file, repo="unsloth/gemma-3-1b-it-GGUF"):
+    return {**_unresolved(repo, kind="gguf"), "file": file}
+
+
+def test_two_failed_files_from_one_repo_are_both_counted_in_the_report():
+    results = [_gguf_unresolved("gemma-Q4_K_M.gguf"), _gguf_unresolved("gemma-BF16.gguf")]
+    report = calibrate.render_report(results, lock={})
+    assert "skipped: 0; unresolved: 2" in report
+    assert "gemma-Q4_K_M.gguf" in report and "gemma-BF16.gguf" in report
+
+
+def test_summary_counts_lock_level_failures_in_its_total():
+    lock = {"gated/repo": {"sha": None, "error": "GatedRepoError"}}
+    assert calibrate.summary([], lock=lock)["unresolved_total"] == 1
+    assert calibrate.summary([_unresolved()], lock=lock)["unresolved_total"] == 2
+    assert calibrate.summary([], lock={})["unresolved_total"] == 0
