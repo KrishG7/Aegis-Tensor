@@ -128,8 +128,8 @@ Limits:
 
 Every known bypass and limit, with its evidence, is listed in [KNOWN_BYPASSES.md](KNOWN_BYPASSES.md).
 
-1. **Calibration findings** (docs/calibration.md: 26,401 tensors across 49 safetensors, 14 MLX and 14 GGUF models).
-   - At default thresholds, 1 of 49 safetensors models (2.0%) raises a false positive: one DETR weight with structured low bits, recorded as accepted (P2).
+1. **Calibration findings** (docs/calibration.md: 27,765 tensors across 54 safetensors, 14 MLX and 14 GGUF models).
+   - At default thresholds, 1 of 54 safetensors models (1.9%) raises a false positive: one DETR weight with structured low bits, recorded as accepted (P2).
    - The float16 bias-vector false positives were fixed with a float16 exponent-lane threshold of 7.2 (P1).
    - Payloads inside **packed quantized tensors** (GPTQ/AWQ int32, bitsandbytes 4-bit uint8, FP8) are only covered by the pooled-entropy rule, with little margin. A format-aware unpacking rule is needed (proposal P3).
    - Models over 3 GB were not calibrated.
