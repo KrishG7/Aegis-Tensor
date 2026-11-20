@@ -168,3 +168,28 @@ def test_claims_script_runs_without_optional_dependencies():
     )
     res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT)
     assert res.returncode == 0, f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+
+
+def test_c10_cannot_be_claimed_while_anything_is_unresolved(monkeypatch, tmp_path):
+    """A model that fails again during a re-run must keep C10 pending, not shrink the denominator."""
+    import json
+
+    from benchmarks import calibrate
+
+    broken = {
+        "repo": "a/b",
+        "family": "decoder",
+        "kind": "safetensors",
+        "sha": "abc",
+        "files": [],
+        "unresolved": "RuntimeError: HTTP status 403",
+        "fingerprint": "f1",
+    }
+    results = tmp_path / "calibration.json"
+    results.write_text(json.dumps([broken]))
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"gated/repo": {"sha": None, "error": "GatedRepoError"}}))
+    monkeypatch.setattr(calibrate, "RESULTS_PATH", results)
+    monkeypatch.setattr(calibrate, "LOCK_PATH", lock)
+    _, problems = claims.calibration_values()
+    assert any("unresolved" in p for p in problems), problems
