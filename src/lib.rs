@@ -4,6 +4,7 @@ use pyo3::exceptions::PyIOError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use safetensors::{Dtype, SafeTensors};
+use std::collections::HashMap;
 use std::fs::File;
 
 /// Result for an individual scanned tensor in a .safetensors file.
@@ -50,6 +51,10 @@ pub struct TensorScanResult {
     /// Tensor names contributing to a pooled small-tensor result. Empty for individual tensors.
     #[pyo3(get)]
     pub pooled_from: Vec<String>,
+    /// Statistics of the values packed inside this tensor (GPTQ/AWQ int32 words, bitsandbytes
+    /// 4-bit bytes, FP8). Only set when the format is known; no rule reads it yet.
+    #[pyo3(get)]
+    pub packed: Option<PackedStats>,
 }
 
 type AnalyzedTensor = (TensorScanResult, Option<(Dtype, Vec<u8>)>);
@@ -530,6 +535,7 @@ fn analyze_tensor(
         rules,
         anomaly_reasons,
         pooled_from: Vec::new(),
+        packed: None,
     }
 }
 
@@ -581,8 +587,10 @@ fn analyze_small_tensor_pool(
     benford_mad_threshold = None,
     exponent_entropy_threshold = 6.5,
     plane_floor = 7.5,
-    exponent_f16_entropy_threshold = 7.2
+    exponent_f16_entropy_threshold = 7.2,
+    packed_formats = None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn scan_safetensors(
     path: &str,
     entropy_threshold: f64,
@@ -590,7 +598,15 @@ pub fn scan_safetensors(
     exponent_entropy_threshold: f64,
     plane_floor: f64,
     exponent_f16_entropy_threshold: f64,
+    packed_formats: Option<HashMap<String, (String, u32)>>,
 ) -> PyResult<Vec<TensorScanResult>> {
+    // tensor name -> packed format and bit width, as read by Python from the repo's config.
+    let mut packed_kinds: HashMap<String, PackedKind> = HashMap::new();
+    for (tensor, (format, bits)) in packed_formats.unwrap_or_default() {
+        let kind =
+            parse_packed_kind(&format, bits).map_err(pyo3::exceptions::PyValueError::new_err)?;
+        packed_kinds.insert(tensor, kind);
+    }
     let file = File::open(path)
         .map_err(|e| PyIOError::new_err(format!("Failed to open model file '{}': {}", path, e)))?;
 
@@ -640,6 +656,7 @@ pub fn scan_safetensors(
                                 error
                             )],
                             pooled_from: Vec::new(),
+                            packed: None,
                         },
                         None,
                     );
@@ -655,7 +672,13 @@ pub fn scan_safetensors(
             } else {
                 None
             };
-            let result = analyze_tensor(name, dtype, shape, tensor_view.data(), thresholds);
+            let mut result = analyze_tensor(name, dtype, shape, tensor_view.data(), thresholds);
+            let packed_kind = packed_kinds
+                .get(name)
+                .copied()
+                .or((dtype == Dtype::F8_E4M3).then_some(PackedKind::Fp8E4M3));
+            result.packed =
+                packed_kind.and_then(|kind| packed_stats(kind, tensor_view.data()).ok());
             (result, small_float_data)
         })
         .collect();
@@ -762,10 +785,218 @@ pub fn scan_tensor_bytes(
     Ok(analyze_tensor(name, parsed, shape, data, thresholds))
 }
 
+// --- Packed quantized tensors ---------------------------------------------------------
+//
+// A quantized tensor stores several small values per larger word, so the byte rules see a
+// jumble. These functions read the values out in place from the memory map, one word at a
+// time, and summarise them. They report statistics only; no rule uses them yet.
+
+/// How the values of a tensor are packed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PackedKind {
+    /// GPTQ/AWQ `qweight`: little-endian int32 words holding 32 / `bits` values, lowest first.
+    /// `bits` is 2, 4 or 8.
+    GptqInt { bits: u32 },
+    /// bitsandbytes 4-bit: one byte holds two values, the first in the high nibble.
+    Bnb4,
+    /// FP8 E4M3: one value per byte, laid out as sign (1) | exponent (4) | mantissa (3).
+    Fp8E4M3,
+}
+
+/// Statistics of the unpacked values of one tensor.
+#[pyclass]
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PackedStats {
+    /// "gptq_int2", "gptq_int4", "gptq_int8", "bnb_4bit" or "fp8_e4m3".
+    #[pyo3(get)]
+    pub format: String,
+    /// Bits per unpacked value.
+    #[pyo3(get)]
+    pub bits: u32,
+    #[pyo3(get)]
+    pub num_values: usize,
+    /// Bias-corrected entropy of the value histogram, in bits (at most `bits`).
+    #[pyo3(get)]
+    pub value_entropy: f64,
+    /// Bias-corrected entropy per lane. For the word formats a lane is the position of a
+    /// value inside its word or byte (0 = lowest bits). For FP8 the lanes are the fields
+    /// [sign, exponent, mantissa].
+    #[pyo3(get)]
+    pub lane_entropies: Vec<f64>,
+    /// Fraction of values whose bit `i` is set, for `i` in 0..bits (0 = least significant).
+    #[pyo3(get)]
+    pub plane_one_fractions: Vec<f64>,
+}
+
+/// The values of one GPTQ/AWQ int32 word, lowest bits first. `bits` must be 2, 4 or 8.
+pub fn unpack_gptq_word(word: u32, bits: u32) -> Vec<u8> {
+    let mask = (1u32 << bits) - 1;
+    (0..32 / bits)
+        .map(|lane| ((word >> (lane * bits)) & mask) as u8)
+        .collect()
+}
+
+/// The two 4-bit values of one bitsandbytes byte, in storage order (high nibble first).
+pub fn unpack_bnb_byte(byte: u8) -> [u8; 2] {
+    [byte >> 4, byte & 0x0F]
+}
+
+/// (sign, exponent, mantissa) of one FP8 E4M3 byte.
+pub fn fp8_e4m3_fields(byte: u8) -> (u8, u8, u8) {
+    (byte >> 7, (byte >> 3) & 0x0F, byte & 0x07)
+}
+
+/// Plug-in entropy of a histogram with the same small-sample correction as `corrected_entropy`,
+/// capped at `cap` bits (the most a value of that width can carry).
+fn histogram_entropy(counts: &[u64; 256], cap: f64) -> f64 {
+    let total: u64 = counts.iter().sum();
+    if total == 0 {
+        return 0.0;
+    }
+    let total = total as f64;
+    let mut entropy = 0.0;
+    let mut observed = 0usize;
+    for &count in counts.iter().filter(|&&c| c > 0) {
+        observed += 1;
+        let p = count as f64 / total;
+        entropy -= p * p.log2();
+    }
+    let corrected = entropy + (observed as f64 - 1.0) / (2.0 * total * std::f64::consts::LN_2);
+    corrected.min(cap)
+}
+
+/// Unpack `data` in place and summarise the values. Errors if the format cannot be unpacked
+/// or `data` is not a whole number of packed units.
+pub fn packed_stats(kind: PackedKind, data: &[u8]) -> Result<PackedStats, String> {
+    let (format, bits, lane_caps, unit): (String, u32, Vec<f64>, usize) = match kind {
+        PackedKind::GptqInt { bits } if matches!(bits, 2 | 4 | 8) => (
+            format!("gptq_int{bits}"),
+            bits,
+            vec![bits as f64; (32 / bits) as usize],
+            4,
+        ),
+        PackedKind::GptqInt { bits } => {
+            return Err(format!(
+                "cannot unpack {bits}-bit GPTQ words: only 2, 4 and 8 are supported"
+            ))
+        }
+        PackedKind::Bnb4 => ("bnb_4bit".to_string(), 4, vec![4.0, 4.0], 1),
+        PackedKind::Fp8E4M3 => ("fp8_e4m3".to_string(), 8, vec![1.0, 4.0, 3.0], 1),
+    };
+    if data.is_empty() || !data.len().is_multiple_of(unit) {
+        return Err(format!(
+            "{} bytes is not a whole number of {}-byte packed units",
+            data.len(),
+            unit
+        ));
+    }
+
+    let mut values = [0u64; 256];
+    let mut lanes = vec![[0u64; 256]; lane_caps.len()];
+    let mut ones = vec![0u64; bits as usize];
+    let mut count = 0u64;
+    let mut record = |lane: usize, value: u8| {
+        lanes[lane][value as usize] += 1;
+        values[value as usize] += 1;
+        count += 1;
+        for (plane, set) in ones.iter_mut().enumerate() {
+            *set += ((value >> plane) & 1) as u64;
+        }
+    };
+
+    match kind {
+        PackedKind::GptqInt { bits } => {
+            let mask = (1u32 << bits) - 1;
+            for chunk in data.chunks_exact(4) {
+                let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                for lane in 0..(32 / bits) {
+                    record(lane as usize, ((word >> (lane * bits)) & mask) as u8);
+                }
+            }
+        }
+        PackedKind::Bnb4 => {
+            for &byte in data {
+                let [first, second] = unpack_bnb_byte(byte);
+                // Lane 0 is the low nibble, lane 1 the high nibble (storage order is high first).
+                record(0, second);
+                record(1, first);
+            }
+        }
+        PackedKind::Fp8E4M3 => {}
+    }
+
+    // FP8 values are whole bytes whose fields are the lanes, so it is handled apart.
+    if kind == PackedKind::Fp8E4M3 {
+        let mut field_lanes = vec![[0u64; 256]; 3];
+        let mut field_values = [0u64; 256];
+        let mut field_ones = [0u64; 8];
+        for &byte in data {
+            let (sign, exponent, mantissa) = fp8_e4m3_fields(byte);
+            field_lanes[0][sign as usize] += 1;
+            field_lanes[1][exponent as usize] += 1;
+            field_lanes[2][mantissa as usize] += 1;
+            field_values[byte as usize] += 1;
+            for (plane, set) in field_ones.iter_mut().enumerate() {
+                *set += ((byte >> plane) & 1) as u64;
+            }
+        }
+        let n = data.len();
+        return Ok(PackedStats {
+            format,
+            bits,
+            num_values: n,
+            value_entropy: histogram_entropy(&field_values, 8.0),
+            lane_entropies: field_lanes
+                .iter()
+                .zip(&lane_caps)
+                .map(|(hist, cap)| histogram_entropy(hist, *cap))
+                .collect(),
+            plane_one_fractions: field_ones.iter().map(|&c| c as f64 / n as f64).collect(),
+        });
+    }
+
+    Ok(PackedStats {
+        format,
+        bits,
+        num_values: count as usize,
+        value_entropy: histogram_entropy(&values, bits as f64),
+        lane_entropies: lanes
+            .iter()
+            .zip(&lane_caps)
+            .map(|(hist, cap)| histogram_entropy(hist, *cap))
+            .collect(),
+        plane_one_fractions: ones.iter().map(|&c| c as f64 / count as f64).collect(),
+    })
+}
+
+/// Map a format name and bit width from Python to a `PackedKind`.
+fn parse_packed_kind(format: &str, bits: u32) -> Result<PackedKind, String> {
+    match format {
+        "gptq" | "awq" => Ok(PackedKind::GptqInt { bits }),
+        "bnb4" | "bnb_4bit" => Ok(PackedKind::Bnb4),
+        "fp8_e4m3" => Ok(PackedKind::Fp8E4M3),
+        other => Err(format!(
+            "unknown packed format '{other}': use gptq, awq, bnb4 or fp8_e4m3"
+        )),
+    }
+}
+
+/// Statistics of the values packed inside one tensor's raw bytes.
+///
+/// `format` is "gptq", "awq" (int32 words, `bits` = 2, 4 or 8), "bnb4" or "fp8_e4m3".
+#[pyfunction]
+#[pyo3(signature = (format, data, bits = 4))]
+pub fn unpack_stats(format: &str, data: &[u8], bits: u32) -> PyResult<PackedStats> {
+    let kind = parse_packed_kind(format, bits).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    packed_stats(kind, data).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Aegis-Tensor core native extension module.
 #[pymodule]
 fn aegis_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TensorScanResult>()?;
+    m.add_class::<PackedStats>()?;
+    m.add_function(wrap_pyfunction!(unpack_stats, m)?)?;
     m.add_function(wrap_pyfunction!(scan_tensor_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(shannon_entropy_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(shannon_entropy_chunked, m)?)?;
@@ -1105,5 +1336,112 @@ mod tests {
         assert!(lane > 6.5 && lane < 7.2, "fixture lane was {}", lane);
         assert!(!as_f16.rules.contains(&"exponent_lane".to_string()));
         assert!(as_bf16.rules.contains(&"exponent_lane".to_string()));
+    }
+
+    #[test]
+    fn unpack_gptq_int4_word_gives_eight_values() {
+        // Nibbles 0..=7, lowest nibble first: 0x7654_3210.
+        assert_eq!(
+            unpack_gptq_word(0x7654_3210, 4),
+            vec![0, 1, 2, 3, 4, 5, 6, 7]
+        );
+        assert_eq!(unpack_gptq_word(0xFFFF_FFFF, 4), vec![15; 8]);
+        // 8-bit variant: four values per word.
+        assert_eq!(
+            unpack_gptq_word(0x4433_2211, 8),
+            vec![0x11, 0x22, 0x33, 0x44]
+        );
+        // 2-bit variant: sixteen values per word.
+        assert_eq!(unpack_gptq_word(0b11_10_01_00, 2)[..4], [0, 1, 2, 3]);
+        assert_eq!(unpack_gptq_word(0, 2).len(), 16);
+    }
+
+    #[test]
+    fn unpack_bnb_byte_gives_two_values() {
+        // bitsandbytes stores the first value in the high nibble.
+        assert_eq!(unpack_bnb_byte(0xA3), [0xA, 0x3]);
+        assert_eq!(unpack_bnb_byte(0x00), [0, 0]);
+        assert_eq!(unpack_bnb_byte(0xFF), [15, 15]);
+    }
+
+    #[test]
+    fn fp8_e4m3_sign_exponent_extraction() {
+        // 1 1010 110: sign 1, exponent 10, mantissa 6.
+        assert_eq!(fp8_e4m3_fields(0b1101_0110), (1, 0b1010, 0b110));
+        assert_eq!(fp8_e4m3_fields(0x00), (0, 0, 0));
+        // 0 1111 111 is the NaN encoding of E4M3.
+        assert_eq!(fp8_e4m3_fields(0x7F), (0, 15, 7));
+    }
+
+    #[test]
+    fn packed_stats_read_the_bytes_in_place_and_count_every_value() {
+        // Two int32 words of eight nibbles each.
+        let data: Vec<u8> = [0x7654_3210u32, 0x7654_3210]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        let stats = packed_stats(PackedKind::GptqInt { bits: 4 }, &data).unwrap();
+        assert_eq!(stats.num_values, 16);
+        assert_eq!(stats.bits, 4);
+        assert_eq!(stats.lane_entropies.len(), 8);
+        // Every lane holds one constant value, so no lane has any entropy.
+        assert!(stats.lane_entropies.iter().all(|e| *e == 0.0));
+        // Eight distinct values, equally often: 3 bits, plus the small-sample correction (7/(2*16*ln 2) = 0.32).
+        assert!(
+            (stats.value_entropy - 3.32).abs() < 0.05,
+            "{}",
+            stats.value_entropy
+        );
+        // The top bit of a nibble is set for values 4..=7, i.e. half of them.
+        assert_eq!(stats.plane_one_fractions.len(), 4);
+        assert!((stats.plane_one_fractions[2] - 0.5).abs() < 1e-9);
+        assert_eq!(stats.plane_one_fractions[3], 0.0);
+    }
+
+    #[test]
+    fn packed_stats_separate_random_bytes_from_peaked_weights() {
+        let random = pseudo_random_bytes(40_000, 7);
+        let peaked: Vec<u8> = (0..40_000u32)
+            .map(|i| {
+                // Quantized weights cluster around the zero point (8); build bytes of two nibbles near 8.
+                let a = 8 + (i % 3) as u8;
+                let b = 7 + (i % 2) as u8;
+                (a << 4) | b
+            })
+            .collect();
+        let random_stats = packed_stats(PackedKind::Bnb4, &random).unwrap();
+        let peaked_stats = packed_stats(PackedKind::Bnb4, &peaked).unwrap();
+        assert_eq!(random_stats.num_values, 80_000);
+        assert!(
+            random_stats.value_entropy > 3.95,
+            "{}",
+            random_stats.value_entropy
+        );
+        assert!(
+            peaked_stats.value_entropy < 2.0,
+            "{}",
+            peaked_stats.value_entropy
+        );
+        assert_eq!(random_stats.lane_entropies.len(), 2);
+    }
+
+    #[test]
+    fn fp8_stats_report_sign_exponent_and_mantissa_fields() {
+        let data: Vec<u8> = (0..=255u8).collect();
+        let stats = packed_stats(PackedKind::Fp8E4M3, &data).unwrap();
+        assert_eq!(stats.num_values, 256);
+        // Lanes are the fields [sign, exponent, mantissa].
+        assert_eq!(stats.lane_entropies.len(), 3);
+        // Every possible byte exactly once: sign is a fair coin, exponent and mantissa are uniform.
+        assert!((stats.plane_one_fractions[7] - 0.5).abs() < 1e-9);
+        assert!(stats.lane_entropies[1] > 3.9);
+    }
+
+    #[test]
+    fn packed_stats_reject_what_cannot_be_unpacked() {
+        assert!(packed_stats(PackedKind::GptqInt { bits: 3 }, &[0; 8]).is_err());
+        // An int32 tensor whose byte length is not a whole number of words.
+        assert!(packed_stats(PackedKind::GptqInt { bits: 4 }, &[0; 7]).is_err());
+        assert!(packed_stats(PackedKind::GptqInt { bits: 4 }, &[]).is_err());
     }
 }

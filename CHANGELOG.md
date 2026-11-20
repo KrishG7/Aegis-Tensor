@@ -16,6 +16,7 @@ Every PR adds a line under Unreleased.
   below it is recorded as an accepted false positive (P2).
 
 ### Added
+- Packed-value statistics for quantized tensors (#32, PR 1, unpacking only; no new rule): `unpack_stats(format, data, bits)` and an optional `packed_formats` argument to `scan_safetensors` read GPTQ/AWQ int32 words, bitsandbytes 4-bit bytes and FP8 E4M3 values in place from the memory map and report value entropy, per-lane entropy and per-bit-plane one-fractions on `TensorScanResult.packed`. FP8 tensors are detected from their dtype; the others need the format from the repo's config. Findings do not change.
 - Design-history banners on six older documents and tests for those banners and README/docs relative links; corrected or removed unverified research citations and figures.
 - docs/KNOWN_BYPASSES.md: every known bypass and limit, with its evidence and where a fix is tracked.
 - Tests of the disarm guarantee at the default width for float32, float16 and bfloat16, in
