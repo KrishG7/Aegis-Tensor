@@ -7,11 +7,11 @@ is counted as a false positive. Revisions are pinned by commit hash in
 
 ## Summary
 
-- Tensors scanned: **27765**; skipped: 10; unresolved: 0
+- Tensors scanned: **28272**; skipped: 10; unresolved: 0
 
 | set | models | tensors | any finding (exit 1 at `--fail-on medium`) | high or critical |
 |---|---|---|---|---|
-| safetensors (non-MLX) | 54 | 18113 | 1.85% (1/54) | 1.85% (1/54) |
+| safetensors (non-MLX) | 55 | 18620 | 1.82% (1/55) | 1.82% (1/55) |
 | MLX safetensors | 14 | 8046 | 0.00% (0/14) | 0.00% (0/14) |
 | GGUF, full scan | 14 | 1606 | 0.00% (0/14) | 0.00% (0/14) |
 
@@ -32,12 +32,12 @@ widely used upload, so any finding is a false positive.
 |---|---|---|---|---|---|---|
 | F32 | 9751 | 0.00% (0/9751) | 0.00% (0/9751) | 0.00% (0/9751) | 0.01% (1/9751) | 0.00% (0/9751) |
 | F16 | 6590 | 0.00% (0/6590) | 0.00% (0/6590) | 0.00% (0/6590) | 0.00% (0/6590) | 0.00% (0/6590) |
-| BF16 | 4755 | 0.00% (0/4755) | 0.00% (0/4755) | 0.00% (0/4755) | 0.00% (0/4755) | 0.00% (0/4755) |
+| BF16 | 5066 | 0.00% (0/5066) | 0.00% (0/5066) | 0.00% (0/5066) | 0.00% (0/5066) | 0.00% (0/5066) |
 | I32 | 3290 | 0.00% (0/3290) | 0.00% (0/3290) | 0.00% (0/3290) | 0.00% (0/3290) | 0.00% (0/3290) |
 | U32 | 2019 | 0.00% (0/2019) | 0.00% (0/2019) | 0.00% (0/2019) | 0.00% (0/2019) | 0.00% (0/2019) |
 | U8 | 1002 | 0.00% (0/1002) | 0.00% (0/1002) | 0.00% (0/1002) | 0.00% (0/1002) | 0.00% (0/1002) |
+| F8_E4M3 | 364 | 0.00% (0/364) | 0.00% (0/364) | 0.00% (0/364) | 0.00% (0/364) | 0.00% (0/364) |
 | I64 | 190 | 0.00% (0/190) | 0.00% (0/190) | 0.00% (0/190) | 0.00% (0/190) | 0.00% (0/190) |
-| F8_E4M3 | 168 | 0.00% (0/168) | 0.00% (0/168) | 0.00% (0/168) | 0.00% (0/168) | 0.00% (0/168) |
 
 ## Per-rule false-positive rate by model family (tensor level)
 
@@ -48,7 +48,7 @@ widely used upload, so any finding is a false positive.
 | encoder | 1806 | 0.00% (0/1806) | 0.00% (0/1806) | 0.00% (0/1806) | 0.00% (0/1806) | 0.00% (0/1806) |
 | gguf | 1606 | 0.00% (0/1606) | 0.00% (0/1606) | 0.00% (0/1606) | 0.00% (0/1606) | 0.00% (0/1606) |
 | mlx | 8046 | 0.00% (0/8046) | 0.00% (0/8046) | 0.00% (0/8046) | 0.00% (0/8046) | 0.00% (0/8046) |
-| quantized | 7953 | 0.00% (0/7953) | 0.00% (0/7953) | 0.00% (0/7953) | 0.00% (0/7953) | 0.00% (0/7953) |
+| quantized | 8460 | 0.00% (0/8460) | 0.00% (0/8460) | 0.00% (0/8460) | 0.00% (0/8460) | 0.00% (0/8460) |
 | seq2seq | 581 | 0.00% (0/581) | 0.00% (0/581) | 0.00% (0/581) | 0.00% (0/581) | 0.00% (0/581) |
 | vision | 2920 | 0.00% (0/2920) | 0.00% (0/2920) | 0.00% (0/2920) | 0.03% (1/2920) | 0.00% (0/2920) |
 
@@ -59,9 +59,9 @@ exponent lane > 6.5 (float16: > 7.2), out-of-range fraction > 0.001, low plane <
 
 **BF16**
 
-- entropy: min 2.911 · p1 3.499 · p50 5.678 · p99 6.336 · max 6.472 (n=4755)
-- exponent_lane: min 0.006 · p1 0.038 · p50 1.998 · p99 3.143 · max 3.474 (n=4219)
-- out_of_range: min 0.000 · p1 0.000 · p50 0.000 · p99 0.000 · max 0.000 (n=4755)
+- entropy: min 2.911 · p1 3.523 · p50 5.626 · p99 6.334 · max 6.472 (n=5066)
+- exponent_lane: min 0.006 · p1 0.038 · p50 1.995 · p99 3.143 · max 3.474 (n=4278)
+- out_of_range: min 0.000 · p1 0.000 · p50 0.000 · p99 0.000 · max 0.000 (n=5066)
 
 **F16**
 
@@ -78,7 +78,7 @@ exponent lane > 6.5 (float16: > 7.2), out-of-range fraction > 0.001, low plane <
 
 **F8_E4M3**
 
-- entropy: min 6.486 · p1 6.516 · p50 6.583 · p99 6.754 · max 6.884 (n=168)
+- entropy: min 6.486 · p1 6.519 · p50 6.607 · p99 6.764 · max 6.884 (n=364)
 
 **I32**
 
@@ -168,6 +168,7 @@ exponent lane > 6.5 (float16: > 7.2), out-of-range fraction > 0.001, low plane <
 | Qwen/Qwen2.5-0.5B-Instruct-GPTQ-Int8 | quantized | c68601e542 | F16, I32 | 794 | — | — | clean |
 | Qwen/Qwen2.5-1.5B-Instruct-GPTQ-Int4 | quantized | 4f5a0e3100 | F16, I32 | 926 | — | — | clean |
 | Qwen/Qwen2.5-1.5B-Instruct-GPTQ-Int8 | quantized | a4d4d71314 | F16, I32 | 926 | — | — | clean |
+| Qwen/Qwen3-0.6B-FP8 | quantized | e5be080333 | BF16, F8_E4M3 | 507 | — | — | clean |
 | RedHatAI/Qwen2.5-0.5B-Instruct-FP8-dynamic | quantized | 67c5c3a4f3 | BF16, F8_E4M3 | 459 | — | — | clean |
 | TheBloke/TinyLlama-1.1B-Chat-v1.0-AWQ | quantized | 2e78382c2b | F16, I32 | 509 | — | — | clean |
 | TheBloke/TinyLlama-1.1B-Chat-v1.0-GPTQ | quantized | 9d4580af0f | BF16, F16, I32 | 817 | — | — | clean |
