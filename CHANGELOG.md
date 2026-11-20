@@ -18,6 +18,7 @@ Every PR adds a line under Unreleased.
   below it is recorded as an accepted false positive (P2).
 
 ### Added
+- `aegis.packedformat.detect_packed_formats()` finds the packed tensors of a safetensors file (GPTQ/AWQ `qweight` with the bit width from `quantize_config.json` or `config.json`, bitsandbytes 4-bit from its `quant_state` siblings) by reading only the header and those small config files. `benchmarks/calibrate.py` uses it, downloads the two config files next to the weights, and records the packed statistics per tensor, so thresholds for the packed-payload rules (#32, PR 2) can be chosen from real clean models. No rule yet; findings do not change.
 - Packed-value statistics for quantized tensors (#32, PR 1, unpacking only; no new rule): `unpack_stats(format, data, bits)` and an optional `packed_formats` argument to `scan_safetensors` read GPTQ/AWQ int32 words, bitsandbytes 4-bit bytes and FP8 E4M3 values in place from the memory map and report value entropy, per-lane entropy and per-bit-plane one-fractions on `TensorScanResult.packed`. FP8 tensors are detected from their dtype; the others need the format from the repo's config. Findings do not change.
 - Design-history banners on six older documents and tests for those banners and README/docs relative links; corrected or removed unverified research citations and figures.
 - docs/KNOWN_BYPASSES.md: every known bypass and limit, with its evidence and where a fix is tracked.
