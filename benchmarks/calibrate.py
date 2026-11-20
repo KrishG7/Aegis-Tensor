@@ -121,6 +121,7 @@ MODELS: list[tuple[str, str]] = [
     ("TheBloke/TinyLlama-1.1B-Chat-v1.0-GPTQ", "quantized"),
     ("TheBloke/TinyLlama-1.1B-Chat-v1.0-AWQ", "quantized"),
     ("RedHatAI/Qwen2.5-0.5B-Instruct-FP8-dynamic", "quantized"),
+    ("Qwen/Qwen3-0.6B-FP8", "quantized"),
     # MLX (Apple silicon; safetensors with 4-bit or 8-bit packed uint32 weights and bf16/f16 scales)
     ("mlx-community/Qwen2.5-0.5B-Instruct-4bit", "mlx"),
     ("mlx-community/Qwen3-0.6B-4bit", "mlx"),
