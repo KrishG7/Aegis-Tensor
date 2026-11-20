@@ -66,9 +66,15 @@ def calibration_values() -> tuple[dict, list[str]]:
     calibrate = _import_benchmark("calibrate")
     fingerprint = _import_benchmark("fingerprint")
     results = json.loads(calibrate.RESULTS_PATH.read_text(encoding="utf-8"))
-    numbers = calibrate.summary(results)
+    lock = json.loads(calibrate.LOCK_PATH.read_text(encoding="utf-8")) if calibrate.LOCK_PATH.exists() else {}
+    numbers = calibrate.summary(results, lock=lock)
     current = fingerprint.scan_fingerprint()
     problems = []
+    if numbers["unresolved_total"]:
+        problems.append(
+            f"calibration has {numbers['unresolved_total']} unresolved repo(s) or file(s): re-run "
+            "benchmarks/calibrate.py until every pinned model resolves, so C10 covers the whole lock"
+        )
     for group in ("safetensors", "mlx", "gguf", "templates"):
         stale = [f for f in numbers[group]["fingerprints"] if f != current]
         if stale:

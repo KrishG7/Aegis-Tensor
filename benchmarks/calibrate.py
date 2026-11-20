@@ -466,6 +466,18 @@ def record_key(record: dict) -> tuple:
     return record.get("kind", "safetensors"), record["repo"], record.get("file")
 
 
+def unresolved_items(results: list[dict], lock: dict | None = None) -> dict:
+    """Every failure, one entry per failed file: {(kind, repo, file): error}.
+
+    Lock-level failures (repo never resolved to a revision) are keyed ("lock", repo, None).
+    """
+    items = {("lock", repo, None): v.get("error") for repo, v in (lock or {}).items() if v.get("sha") is None}
+    for record in results:
+        if is_unresolved(record):
+            items[record_key(record)] = record.get("unresolved") or str(record["skipped"]).removeprefix("error: ")
+    return items
+
+
 def _group(record: dict) -> str:
     kind = record.get("kind", "safetensors")
     return "mlx" if kind == "safetensors" and record["family"] == "mlx" else kind
@@ -487,9 +499,12 @@ def model_outcome(record: dict) -> dict:
     return {"rules": dict(rules), "other": other, "tensors": tensors, "dtypes": sorted(dtypes), "worst": worst}
 
 
-def summary(results: list[dict]) -> dict:
-    """Headline numbers per group, used by the report and by tests/test_claims.py."""
-    out = {}
+def summary(results: list[dict], lock: dict | None = None) -> dict:
+    """Headline numbers per group, used by the report and by tests/test_claims.py.
+
+    ``unresolved_total`` also counts lock-level failures, which belong to no group.
+    """
+    out = {"unresolved_total": len(unresolved_items(results, lock))}
     for group in GROUPS:
         records = [r for r in results if r.get("files") and _group(r) == group]
         outcomes = [model_outcome(r) for r in records]
@@ -536,10 +551,7 @@ def _quantiles(values: list[float]) -> str:
 def render_report(results: list[dict], lock: dict) -> str:
     scanned = [r for r in results if r.get("files")]
     skipped = [r for r in results if not r.get("files") and not is_unresolved(r)]
-    unresolved = {repo: v["error"] for repo, v in lock.items() if v.get("sha") is None}
-    for record in results:
-        if is_unresolved(record):
-            unresolved[record["repo"]] = record.get("unresolved") or str(record["skipped"]).removeprefix("error: ")
+    unresolved = unresolved_items(results, lock)
     tensor_records = [r for r in scanned if r.get("kind", "safetensors") in ("safetensors", "gguf")]
 
     by_dtype = defaultdict(lambda: {"tensors": 0, **{rule: 0 for rule in RULES}})
@@ -673,8 +685,9 @@ def render_report(results: list[dict], lock: dict) -> str:
         lines += ["", "## Skipped", ""]
         for record in skipped:
             lines.append(f"- `{record['repo']}`: {record['skipped']}")
-        for repo, error in sorted(unresolved.items()):
-            lines.append(f"- `{repo}`: could not scan ({error})")
+        for (_, repo, file), error in sorted(unresolved.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
+            where = f"`{repo}` · `{file}`" if file else f"`{repo}`"
+            lines.append(f"- {where}: could not scan ({error})")
     lines += ["", "## Proposals", "", PROPOSALS_START, "_Not written yet._", PROPOSALS_END, ""]
     return "\n".join(lines)
 
