@@ -82,6 +82,7 @@ def test_every_scanner_code_maps_to_exactly_one_rule():
         "exponent_lane",
         "out_of_range",
         "low_plane",
+        "packed_entropy",
         "benford",
         "unreadable",
         # Header channels (FormatFinding.channel)

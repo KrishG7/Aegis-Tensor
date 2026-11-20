@@ -565,7 +565,7 @@ fn analyze_small_tensor_pool(
 
 /// Zero-copy scan of a .safetensors model file using memory mapping.
 ///
-/// Each tensor is checked with three rules:
+/// Each tensor is checked with three rules, plus a fourth for packed quantized tensors:
 /// 1. Whole-tensor Shannon entropy above `entropy_threshold` (encrypted or
 ///    compressed blob, for tensors of at least 4 KiB).
 /// 2. Sign/exponent byte lane above `exponent_entropy_threshold` (float values
@@ -577,6 +577,9 @@ fn analyze_small_tensor_pool(
 ///    (docs/calibration.md).
 /// 3. Low mantissa bit planes below `plane_floor` (structured data hidden in the
 ///    least significant bits). Clean weights measure about 8 bits.
+/// 4. Packed quantized tensors named in `packed_formats` (and FP8 tensors, found by dtype):
+///    entropy of the unpacked values above the per-format limit (`packed_entropy_thresholds`,
+///    default 3.97 for 4-bit, 7.70 for 8-bit, 7.20 for FP8), for tensors of at least 100,000 values.
 ///
 /// Benford's Law MAD is reported on every tensor, but it only flags a tensor when
 /// `benford_mad_threshold` is given. It is noisy on small tensors and is off by default.
@@ -588,7 +591,8 @@ fn analyze_small_tensor_pool(
     exponent_entropy_threshold = 6.5,
     plane_floor = 7.5,
     exponent_f16_entropy_threshold = 7.2,
-    packed_formats = None
+    packed_formats = None,
+    packed_entropy_thresholds = None
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn scan_safetensors(
@@ -599,7 +603,9 @@ pub fn scan_safetensors(
     plane_floor: f64,
     exponent_f16_entropy_threshold: f64,
     packed_formats: Option<HashMap<String, (String, u32)>>,
+    packed_entropy_thresholds: Option<HashMap<String, f64>>,
 ) -> PyResult<Vec<TensorScanResult>> {
+    let packed_limits = packed_entropy_thresholds.unwrap_or_default();
     // tensor name -> packed format and bit width, as read by Python from the repo's config.
     let mut packed_kinds: HashMap<String, PackedKind> = HashMap::new();
     for (tensor, (format, bits)) in packed_formats.unwrap_or_default() {
@@ -679,6 +685,16 @@ pub fn scan_safetensors(
                 .or((dtype == Dtype::F8_E4M3).then_some(PackedKind::Fp8E4M3));
             result.packed =
                 packed_kind.and_then(|kind| packed_stats(kind, tensor_view.data()).ok());
+            // Rule: the unpacked values of a quantized tensor look random (payload in packed weights).
+            if let Some(reason) = result
+                .packed
+                .as_ref()
+                .and_then(|stats| packed_entropy_reason(stats, &packed_limits))
+            {
+                result.rules.push("packed_entropy".to_string());
+                result.anomaly_reasons.push(reason);
+                result.is_suspicious = true;
+            }
             (result, small_float_data)
         })
         .collect();
@@ -801,6 +817,39 @@ pub enum PackedKind {
     Bnb4,
     /// FP8 E4M3: one value per byte, laid out as sign (1) | exponent (4) | mantissa (3).
     Fp8E4M3,
+}
+
+/// Tensors with fewer unpacked values are not judged: calibration covered tensors of at least
+/// 114,688 values (docs/calibration.md, P3), and the entropy of a short sample is too noisy.
+const MIN_PACKED_VALUES: usize = 100_000;
+
+/// Default entropy limit of the unpacked values, in bits, per format. Each is the highest clean
+/// value seen in calibration plus a margin; a random payload scores about the width of the value
+/// (4 or 8 bits). See docs/calibration.md, P3. 2-bit GPTQ was not calibrated and has no rule.
+fn default_packed_threshold(format: &str) -> Option<f64> {
+    match format {
+        "gptq_int4" | "bnb_4bit" => Some(3.97),
+        "gptq_int8" => Some(7.70),
+        "fp8_e4m3" => Some(7.20),
+        _ => None,
+    }
+}
+
+/// The reason text if the unpacked values of a tensor look random (a payload replacing packed
+/// weights), otherwise None. `overrides` replaces the default threshold of a format.
+fn packed_entropy_reason(stats: &PackedStats, overrides: &HashMap<String, f64>) -> Option<String> {
+    let limit = overrides
+        .get(&stats.format)
+        .copied()
+        .or_else(|| default_packed_threshold(&stats.format))?;
+    if stats.num_values >= MIN_PACKED_VALUES && stats.value_entropy > limit {
+        Some(format!(
+            "Unpacked {} values are near-uniform ({:.4} > threshold {:.4} of at most {} bits) - packed weights overwritten with encrypted or compressed data",
+            stats.format, stats.value_entropy, limit, stats.bits
+        ))
+    } else {
+        None
+    }
 }
 
 /// Statistics of the unpacked values of one tensor.
@@ -1444,5 +1493,60 @@ mod tests {
         // An int32 tensor whose byte length is not a whole number of words.
         assert!(packed_stats(PackedKind::GptqInt { bits: 4 }, &[0; 7]).is_err());
         assert!(packed_stats(PackedKind::GptqInt { bits: 4 }, &[]).is_err());
+    }
+
+    fn stats_with(format: &str, bits: u32, num_values: usize, value_entropy: f64) -> PackedStats {
+        PackedStats {
+            format: format.to_string(),
+            bits,
+            num_values,
+            value_entropy,
+            lane_entropies: Vec::new(),
+            plane_one_fractions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn packed_entropy_rule_uses_the_per_format_default_limit() {
+        let none = HashMap::new();
+        // Just under and just over each default limit, on a tensor large enough to be judged.
+        for (format, bits, limit) in [
+            ("gptq_int4", 4, 3.97),
+            ("bnb_4bit", 4, 3.97),
+            ("gptq_int8", 8, 7.70),
+            ("fp8_e4m3", 8, 7.20),
+        ] {
+            assert!(
+                packed_entropy_reason(&stats_with(format, bits, 200_000, limit - 0.01), &none)
+                    .is_none()
+            );
+            assert!(
+                packed_entropy_reason(&stats_with(format, bits, 200_000, limit + 0.01), &none)
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn packed_entropy_rule_skips_small_tensors_and_uncalibrated_formats() {
+        let none = HashMap::new();
+        // Random-looking but under 100,000 values: not judged.
+        assert!(packed_entropy_reason(&stats_with("gptq_int4", 4, 99_999, 4.0), &none).is_none());
+        assert!(packed_entropy_reason(&stats_with("gptq_int4", 4, 100_000, 4.0), &none).is_some());
+        // 2-bit GPTQ was not calibrated, so it has no default limit.
+        assert!(packed_entropy_reason(&stats_with("gptq_int2", 2, 500_000, 2.0), &none).is_none());
+    }
+
+    #[test]
+    fn packed_entropy_rule_honours_an_override_and_names_the_numbers() {
+        let mut limits = HashMap::new();
+        limits.insert("gptq_int4".to_string(), 3.5);
+        let reason =
+            packed_entropy_reason(&stats_with("gptq_int4", 4, 200_000, 3.6), &limits).unwrap();
+        assert!(
+            reason.contains("3.6000") && reason.contains("3.5000") && reason.contains("gptq_int4")
+        );
+        // The override only touches its own format.
+        assert!(packed_entropy_reason(&stats_with("fp8_e4m3", 8, 200_000, 7.0), &limits).is_none());
     }
 }

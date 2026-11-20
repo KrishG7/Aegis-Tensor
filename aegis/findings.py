@@ -82,6 +82,15 @@ RULES: dict[str, dict[str, Any]] = {
         "treatment": "inspect",
         **_STEGO,
     },
+    "AEGIS-T007": {
+        "code": "packed_entropy",
+        "name": "random-packed-quantized-values",
+        "severity": "high",
+        "confidence": 0.7,
+        "title": "Unpacked quantized values are near-uniform: packed weights overwritten",
+        "treatment": "quarantine",
+        **_STEGO,
+    },
     "AEGIS-T006": {
         "code": "unreadable",
         "name": "unreadable-tensor",
@@ -487,6 +496,14 @@ def from_safetensors(path: str, tensor_results, header_result=None) -> list[Find
                         "out_of_range_fraction": _round(result.out_of_range_fraction, 6),
                         "benford_mad": round(result.benford_mad, 4) if rule_code == "benford" else None,
                         **({"pooled_from": result.pooled_from} if result.pooled_from else {}),
+                        **(
+                            {
+                                "packed_format": result.packed.format,
+                                "packed_value_entropy": round(result.packed.value_entropy, 4),
+                            }
+                            if rule_code == "packed_entropy" and result.packed
+                            else {}
+                        ),
                     },
                     command=command,
                 )

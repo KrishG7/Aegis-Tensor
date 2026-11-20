@@ -204,8 +204,8 @@ exponent lane > 6.5 (float16: > 7.2), out-of-range fraction > 0.001, low plane <
 ## Proposals
 
 <!-- proposals:start -->
-Each proposal cites the measurements above. P1 and P2 were adopted in v0.2.0 (issue D1); P3 is
-tracked in issue D2.
+Each proposal cites the measurements above. P1 and P2 were adopted in v0.2.0 (issue D1); P3 was adopted with the packed-value
+entropy rule (issue #32).
 
 ### P1: float16-specific exponent-lane threshold (adopted)
 
@@ -229,7 +229,7 @@ tracked in issue D2.
 
 **Adopted.** The floor stays at 7.5. `facebook/detr-resnet-50` · `model.decoder.layers.0.self_attn.v_proj.weight` (low plane 5.94) is an accepted false positive.
 
-### P3: packed quantized tensors need format-aware analysis, not a new threshold
+### P3: packed quantized tensors need format-aware analysis (adopted)
 
 **Evidence.** No rule fired on any packed quantized tensor:
 
@@ -245,7 +245,16 @@ Only the pooled-entropy rule (7.92) applies to integer and FP8 tensors.
 - Larger models may cross the threshold and produce false positives.
 - An encrypted payload in a packed tensor (about 8.0) is hard to tell apart from clean data (about 7.8).
 
-The right fix is a format-aware rule that unpacks the 4-bit values using the quantization config and tests their distribution, together with the FP8 exponent-lane rule that FP8 tensors currently lack. Until then, the scanner offers little assurance about payloads inside packed quantized tensors, and docs/THREAT_MATRIX.md should say so.
+**Adopted (`packed_entropy`, AEGIS-T007).** The scanner unpacks the values using the quantization config (or the FP8 dtype) and measures their entropy. Each limit is the highest clean value plus a margin; a random payload scores about the value width (4 or 8 bits). Tensors under 100,000 values are not judged, and 2-bit GPTQ has no limit because none was calibrated.
+
+| Format | Tensors | Highest clean entropy | Limit | Margin |
+|---|---|---|---|---|
+| GPTQ/AWQ int4 | 840 | 3.9127 | 3.97 | 0.06 |
+| bitsandbytes 4-bit | 322 | 3.8858 | 3.97 | 0.08 |
+| GPTQ int8 | 364 | 7.5370 | 7.70 | 0.16 |
+| FP8 E4M3 | 364 | 6.8852 | 7.20 | 0.32 |
+
+No clean tensor in the 11 quantized models is flagged. The 4-bit margins are thin, so a larger model could cross them; the lead should confirm these thresholds. A payload covering about 10% of a 4-bit tensor stays below the limit (L04).
 
 ### Not measured
 

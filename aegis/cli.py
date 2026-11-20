@@ -44,6 +44,7 @@ from aegis import (
 )
 from aegis.disarm import DEFAULT_LOW_BITS, default_disarm_path
 from aegis.findings import from_fuzz
+from aegis.packedformat import detect_packed_formats
 from aegis.severity import EXIT_ERROR, exit_code_for, tensor_severity
 from aegis.thresholds import DEFAULT_THRESHOLDS
 
@@ -273,6 +274,8 @@ def _scan_file_core(path: Path, thresholds: dict, keep_streams: bool = False) ->
             thresholds["exponent"],
             thresholds["plane"],
             exponent_f16_entropy_threshold=thresholds["exponent_f16"],
+            packed_formats=detect_packed_formats(path) or None,
+            packed_entropy_thresholds=thresholds.get("packed_entropy"),
         )
         header = scan_safetensors_header(path)
     except Exception as e:  # malformed safetensors: core parse error, bad header JSON or encoding
@@ -592,6 +595,7 @@ def scan_command(
         "exponent_f16": exponent_threshold_f16,
         "plane": plane_floor,
         "benford": benford_threshold,
+        "packed_entropy": DEFAULT_THRESHOLDS["packed_entropy"],
     }
     from aegis.engines import select
     from aegis.verdict import file_verdict

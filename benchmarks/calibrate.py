@@ -250,7 +250,8 @@ def scan_file(path: Path) -> dict:
         t["exponent"],
         t["plane"],
         exponent_f16_entropy_threshold=t["exponent_f16"],
-        packed_formats=detect_packed_formats(path) or None,  # statistics only; no rule reads them yet
+        packed_formats=detect_packed_formats(path) or None,
+        packed_entropy_thresholds=t["packed_entropy"],
     )
     header = scan_safetensors_header(path)
     return {
@@ -462,12 +463,13 @@ def scan_job(api, kind: str, repo: str, extra: str, sha: str, cache: Path, max_g
 
 # --- Aggregation and report ----------------------------------------------------------
 
-RULES = ("pooled_entropy", "exponent_lane", "out_of_range", "low_plane", "unreadable")
+RULES = ("pooled_entropy", "exponent_lane", "out_of_range", "low_plane", "packed_entropy", "unreadable")
 SEVERITY = {
     "unreadable": "high",
     "exponent_lane": "high",
     "out_of_range": "high",
     "low_plane": "high",
+    "packed_entropy": "high",
     "pooled_entropy": "medium",
 }
 HEADER_SEVERITY = {"metadata": "high", "header_whitespace": "medium", "tensor_name": "medium", "secret": "medium"}

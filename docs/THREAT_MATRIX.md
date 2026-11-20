@@ -44,6 +44,11 @@ test documents it · `limit` = detected only in part, with the limit stated · `
 | T17 | NaN / Inf injection | Inference-breaking tampering | Out-of-range fraction | Tensor name | `quarantine` | tested |
 | T19 | Payload split across small safetensors tensors | Evasion of the sample floor | Per-dtype pooled sign/exponent lane and out-of-range rules at 256 combined elements | Names of all contributing tensors | `quarantine` | tested (safetensors only) |
 | T19b | Payload split across small GGUF tensors | Evasion of the sample floor | Not pooled: GGUF tensors are checked one at a time (L03, `test_t19_payload_split_into_tiny_gguf_tensors_is_flagged`, strict xfail) | — | `quarantine` | gap |
+| T37 | Payload replacing a GPTQ/AWQ int4 `qweight` tensor | Random words in packed weights | Entropy of the unpacked 4-bit values above 3.97 (`packed_entropy`, AEGIS-T007; C31, `test_payload_in_packed_tensor_is_flagged`) | high | `quarantine` | covered |
+| T38 | Payload replacing a GPTQ int8 tensor | Random words in packed weights | Unpacked 8-bit value entropy above 7.70 (C31) | high | `quarantine` | covered |
+| T39 | Payload replacing a bitsandbytes 4-bit weight | Random bytes in packed nibbles | Unpacked 4-bit value entropy above 3.97 (C31) | high | `quarantine` | covered |
+| T40 | Payload replacing an FP8 E4M3 weight | Random bytes in an FP8 tensor | Entropy of the FP8 bytes above 7.20 (C31) | high | `quarantine` | covered |
+| T41 | Small payload (about 10%) in a packed 4-bit tensor | Partial overwrite stays under the threshold | Not detected (L04, `test_t41_small_payload_in_packed_tensor_is_flagged`, strict xfail) | — | `quarantine` | gap |
 
 Known limits: the lane rule and the out-of-range rule assume trained weights stay below
 1e4 in magnitude. Tensors with genuinely larger values need a per-model threshold. Partial
@@ -131,7 +136,7 @@ Every known bypass and limit, with its evidence, is listed in [KNOWN_BYPASSES.md
 1. **Calibration findings** (docs/calibration.md: 27,765 tensors across 54 safetensors, 14 MLX and 14 GGUF models).
    - At default thresholds, 1 of 54 safetensors models (1.9%) raises a false positive: one DETR weight with structured low bits, recorded as accepted (P2).
    - The float16 bias-vector false positives were fixed with a float16 exponent-lane threshold of 7.2 (P1).
-   - Payloads inside **packed quantized tensors** (GPTQ/AWQ int32, bitsandbytes 4-bit uint8, FP8) are only covered by the pooled-entropy rule, with little margin. A format-aware unpacking rule is needed (proposal P3).
+   - Payloads inside **packed quantized tensors** (GPTQ/AWQ int32, bitsandbytes 4-bit uint8, FP8) are covered by the packed-entropy rule (T37 to T40, P3). The 4-bit margins over clean models are thin (0.06 to 0.08 bits), and a payload of about 10% of a tensor evades it (T41, L04). 2-bit GPTQ is not covered.
    - Models over 3 GB were not calibrated.
 2. **Small GGUF tensors** (T19b) are still checked one at a time; pooling covers only safetensors. A strict-xfail test documents it (L03).
 3. **Trojan treatment.** Detection exists for T15, but there's no fine-prune or retrain step.

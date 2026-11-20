@@ -8,6 +8,9 @@ Every PR adds a line under Unreleased.
 
 ## [Unreleased]
 
+### Added
+- `packed_entropy` rule (AEGIS-T007, high): measures the entropy of the unpacked values of GPTQ/AWQ (4/8-bit), bitsandbytes 4-bit and FP8 tensors of at least 100,000 values and flags near-uniform ones. Limits are 3.97 (4-bit), 7.70 (int8) and 7.20 (FP8), from calibration over 11 quantized models (P3). A payload of about 10% of a 4-bit tensor evades it (L04). Needs the lead's approval of the thresholds. C10 is stale until the calibration is re-claimed (#32).
+
 ### Changed
 - Calibration re-run from the pinned lock under the current rules: all 54 safetensors models, 14 MLX models and 14 GGUF files resolved (`unresolved: 0`), including the five that failed to download before. C10 is claimed again over the full set: 1 of 54 safetensors models (the accepted DETR tensor), 0 of 14 MLX, 0 of 14 GGUF files (#48).
 - Calibration report counts each failed file separately (two failed files from one repo were collapsed into one) and names the file; `summary()` gains `unresolved_total`, which includes lock-level failures. `scripts/claims.py` now reports a problem for C10 while anything is unresolved, so a failed model can no longer shrink the claimed set unnoticed (#48).

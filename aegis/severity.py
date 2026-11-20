@@ -22,6 +22,7 @@ TENSOR_RULE_SEVERITY = {
     "exponent_lane": "high",
     "out_of_range": "high",
     "low_plane": "high",
+    "packed_entropy": "high",
     "pooled_entropy": "medium",
     "benford": "low",
 }
