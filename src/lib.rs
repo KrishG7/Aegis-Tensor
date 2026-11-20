@@ -907,8 +907,9 @@ pub fn packed_stats(kind: PackedKind, data: &[u8]) -> Result<PackedStats, String
     match kind {
         PackedKind::GptqInt { bits } => {
             let mask = (1u32 << bits) - 1;
-            for chunk in data.chunks_exact(4) {
-                let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            // `data.len()` is a multiple of 4 (checked above), so no bytes are left over.
+            for chunk in data.as_chunks::<4>().0 {
+                let word = u32::from_le_bytes(*chunk);
                 for lane in 0..(32 / bits) {
                     record(lane as usize, ((word >> (lane * bits)) & mask) as u8);
                 }
