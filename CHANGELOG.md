@@ -9,6 +9,7 @@ Every PR adds a line under Unreleased.
 ## [Unreleased]
 
 ### Changed
+- Calibration re-run from the pinned lock under the current rules: all 54 safetensors models, 14 MLX models and 14 GGUF files resolved (`unresolved: 0`), including the five that failed to download before. C10 is claimed again over the full set: 1 of 54 safetensors models (the accepted DETR tensor), 0 of 14 MLX, 0 of 14 GGUF files (#48).
 - Calibration report counts each failed file separately (two failed files from one repo were collapsed into one) and names the file; `summary()` gains `unresolved_total`, which includes lock-level failures. `scripts/claims.py` now reports a problem for C10 while anything is unresolved, so a failed model can no longer shrink the claimed set unnoticed (#48).
 - Calibration (`benchmarks/calibrate.py`): a download or network error now makes a repo unresolved and is shown in the report and in `summary()`; before, it was logged as skipped and the report said `unresolved: 0`. Unresolved repos are retried on every run, and "skipped" now means only that the repo has nothing to scan at the pinned revision (#48).
 - float16 tensors use their own exponent-lane threshold, 7.2 (`--exponent-threshold-f16`); float32
