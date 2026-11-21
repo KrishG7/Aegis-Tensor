@@ -44,14 +44,15 @@
       "text": "False positives at default thresholds on popular public models: {safetensors_flagged} of {safetensors_models} safetensors models, {mlx_flagged} of {mlx_models} MLX models and {gguf_flagged} of {gguf_models} GGUF files raise a finding. {template_flagged} of {template_files} GGUF files have a flagged chat template.",
       "values": {
         "safetensors_flagged": 1,
-        "safetensors_models": 54,
+        "safetensors_models": 55,
         "mlx_flagged": 0,
         "mlx_models": 14,
         "gguf_flagged": 0,
         "gguf_models": 14,
         "template_flagged": 1,
         "template_files": 34
-      }
+      },
+      "status": "pending"
     },
     {
       "id": "C11",
@@ -144,6 +145,10 @@
       "text": "Remote repository inspection detects trust_remote_code=True requirements once per repository without downloading weights."
     },
     {
+      "id": "C31",
+      "text": "Random bytes replacing the packed weights of a GPTQ/AWQ (4- or 8-bit), bitsandbytes 4-bit or FP8 tensor of at least 100,000 values are flagged (AEGIS-T007) by the entropy of the unpacked values."
+    },
+    {
       "id": "L01",
       "kind": "limit",
       "text": "Random bits hidden in the low mantissa bits cannot be detected by any static statistic. Only `aegis disarm` removes them."
@@ -152,6 +157,11 @@
       "id": "L03",
       "kind": "limit",
       "text": "Payloads split across GGUF tensors of fewer than 256 elements are not detected. Small tensors are pooled for safetensors only."
+    },
+    {
+      "id": "L04",
+      "kind": "limit",
+      "text": "A payload covering about 10% of a packed 4-bit tensor stays under the packed-entropy threshold and is not detected. The 4-bit thresholds have a thin margin over clean models. 2-bit GPTQ has no rule."
     }
   ]
 }

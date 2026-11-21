@@ -404,3 +404,127 @@ def test_pools_are_per_dtype(tmp_path):
     assert len(pooled) == 2
     assert {result.dtype for result in pooled} == {"F16", "F32"}
     assert all(len(result.pooled_from) == 40 for result in pooled)
+
+
+# --- Packed quantized tensors (issue #32, PR 2): T37 to T40, gap T41 ---------------------------
+# A payload replaces the packed values of a GPTQ/AWQ, bitsandbytes 4-bit or FP8 tensor. The rule
+# measures the entropy of the unpacked values; thresholds come from docs/calibration.md (P3).
+
+
+def _write_raw(path: Path, tensors: dict) -> Path:
+    """safetensors writer for dtypes numpy cannot save (F8_E4M3): {name: (dtype, shape, bytes)}."""
+    header, offset, blobs = {}, 0, []
+    for name, (dtype, shape, raw) in tensors.items():
+        header[name] = {"dtype": dtype, "shape": shape, "data_offsets": [offset, offset + len(raw)]}
+        offset += len(raw)
+        blobs.append(raw)
+    head = json.dumps(header, separators=(",", ":")).encode()  # compact: no whitespace to flag
+    head += b" " * ((-len(head)) % 8)
+    path.write_bytes(struct.pack("<Q", len(head)) + head + b"".join(blobs))
+    return path
+
+
+def _levels(rng, n: int, centre: float, sigma: float, top: int) -> np.ndarray:
+    """Quantized weight levels 0..top: a bell curve, like a real quantized layer."""
+    return np.clip(np.round(rng.normal(centre, sigma, n)), 0, top).astype(np.uint32)
+
+
+def _pack_words(values: np.ndarray, bits: int) -> np.ndarray:
+    per_word = 32 // bits
+    v = values.reshape(-1, per_word)
+    return sum((v[:, lane] << (bits * lane) for lane in range(per_word)), np.zeros(len(v), np.uint32)).astype("<u4")
+
+
+def _to_e4m3(x: np.ndarray) -> np.ndarray:
+    """Round float values to FP8 E4M3 bytes (no ml_dtypes needed)."""
+    x = np.clip(x, -448, 448)
+    a = np.abs(x)
+    e = np.clip(np.floor(np.log2(np.where(a > 0, a, 1))), -6, 8)
+    code = np.where(a >= 2.0**-6, (e + 7) * 8 + np.round((a / 2.0**e - 1) * 8), np.round(a * 512))
+    return np.clip(code, 0, 126).astype(np.uint8) | ((x < 0).astype(np.uint8) << 7)
+
+
+N_VALUES = 1 << 17  # 131,072 values per tensor, above the 100,000 the calibration covered
+
+
+def _packed_model(tmp_path: Path, fmt: str, payload: float = 0.0, seed: int = 37) -> Path:
+    """A one-layer model in `fmt`. `payload` is the fraction of its packed bytes replaced with random bytes."""
+    rng = np.random.default_rng(seed)
+    path = tmp_path / "m.safetensors"
+    if fmt in ("gptq_int4", "gptq_int8"):
+        bits = 4 if fmt == "gptq_int4" else 8
+        values = _levels(rng, N_VALUES, (2**bits - 1) / 2, 2.2 if bits == 4 else 40, 2**bits - 1)
+        raw = bytearray(_pack_words(values, bits).tobytes())
+        (tmp_path / "quantize_config.json").write_text(json.dumps({"bits": bits}))
+        name, dtype = "layer.qweight", "I32"
+    elif fmt == "bnb_4bit":
+        v = _levels(rng, N_VALUES, 7.5, 2.5, 15).reshape(-1, 2)
+        raw = bytearray(((v[:, 0] << 4) | v[:, 1]).astype(np.uint8).tobytes())
+        name, dtype = "layer.weight", "U8"
+    else:  # fp8_e4m3: weights scaled so the largest is near 448, as FP8 checkpoints are
+        raw = bytearray(_to_e4m3(rng.normal(0, 100, N_VALUES)).tobytes())
+        name, dtype = "layer.weight", "F8_E4M3"
+    if payload:
+        n = int(len(raw) * payload)
+        raw[:n] = rng.integers(0, 256, n, dtype=np.uint8).tobytes()
+    tensors = {name: (dtype, [len(raw) // {"I32": 4}.get(dtype, 1)], bytes(raw))}
+    if fmt == "bnb_4bit":
+        tensors["layer.weight.quant_state.bitsandbytes__nf4"] = ("U8", [8], bytes(8))
+    return _write_raw(path, tensors)
+
+
+def _packed_findings(path: Path) -> tuple[list[str], int]:
+    """(packed-rule ids found, exit code) of an `aegis scan` of `path`."""
+    result = runner.invoke(app, ["scan", str(path), "--format", "json"])
+    found = [f["rule"] for f in json.loads(result.output)["files"][0]["findings"] if f["rule"] == "AEGIS-T007"]
+    return found, result.exit_code
+
+
+PACKED_FORMATS = ["gptq_int4", "gptq_int8", "bnb_4bit", "fp8_e4m3"]
+
+
+@needs_core
+@pytest.mark.claim("C31")
+@pytest.mark.parametrize("fmt", PACKED_FORMATS)
+def test_payload_in_packed_tensor_is_flagged(tmp_path, fmt):
+    """T37-T40: random bytes replacing a whole packed tensor are flagged by the packed rule."""
+    rules, exit_code = _packed_findings(_packed_model(tmp_path, fmt, payload=1.0))
+    assert rules == ["AEGIS-T007"]
+    assert exit_code == 1
+
+
+@needs_core
+@pytest.mark.claim("C31")
+@pytest.mark.parametrize("fmt", PACKED_FORMATS)
+def test_clean_quantized_tensor_is_not_flagged(tmp_path, fmt):
+    """The same layer with realistic values raises no finding."""
+    rules, exit_code = _packed_findings(_packed_model(tmp_path, fmt))
+    assert rules == []
+    assert exit_code == 0
+
+
+@needs_core
+@pytest.mark.claim("C31")
+def test_packed_finding_names_the_tensor_and_its_measured_entropy(tmp_path):
+    path = _packed_model(tmp_path, "gptq_int4", payload=1.0)
+    result = runner.invoke(app, ["scan", str(path), "--format", "json"])
+    finding = next(f for f in json.loads(result.output)["files"][0]["findings"] if f["rule"] == "AEGIS-T007")
+    assert finding["location"]["tensor"] == "layer.qweight"
+    assert finding["evidence"]["packed_format"] == "gptq_int4"
+    assert finding["evidence"]["packed_value_entropy"] > 3.97
+
+
+@needs_core
+@pytest.mark.claim("C31")
+def test_without_the_repo_config_a_gptq_tensor_is_not_assumed_packed(tmp_path):
+    path = _packed_model(tmp_path, "gptq_int4", payload=1.0)
+    (tmp_path / "quantize_config.json").unlink()
+    assert _packed_findings(path)[0] == []
+
+
+@needs_core
+@pytest.mark.claim("L04")
+@pytest.mark.xfail(strict=True, reason="known gap L04: a small payload in a packed tensor stays under the threshold")
+def test_t41_small_payload_in_packed_tensor_is_flagged(tmp_path):
+    rules, _ = _packed_findings(_packed_model(tmp_path, "gptq_int4", payload=0.10))
+    assert rules == ["AEGIS-T007"]

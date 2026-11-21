@@ -121,6 +121,7 @@ MODELS: list[tuple[str, str]] = [
     ("TheBloke/TinyLlama-1.1B-Chat-v1.0-GPTQ", "quantized"),
     ("TheBloke/TinyLlama-1.1B-Chat-v1.0-AWQ", "quantized"),
     ("RedHatAI/Qwen2.5-0.5B-Instruct-FP8-dynamic", "quantized"),
+    ("Qwen/Qwen3-0.6B-FP8", "quantized"),
     # MLX (Apple silicon; safetensors with 4-bit or 8-bit packed uint32 weights and bf16/f16 scales)
     ("mlx-community/Qwen2.5-0.5B-Instruct-4bit", "mlx"),
     ("mlx-community/Qwen3-0.6B-4bit", "mlx"),
@@ -239,6 +240,7 @@ def evict_repo(cache: Path, repo: str) -> None:
 def scan_file(path: Path) -> dict:
     from aegis import scan_safetensors
     from aegis.formatscan import scan_safetensors_header
+    from aegis.packedformat import detect_packed_formats
 
     t = DEFAULT_THRESHOLDS
     results = scan_safetensors(
@@ -248,6 +250,8 @@ def scan_file(path: Path) -> dict:
         t["exponent"],
         t["plane"],
         exponent_f16_entropy_threshold=t["exponent_f16"],
+        packed_formats=detect_packed_formats(path) or None,
+        packed_entropy_thresholds=t["packed_entropy"],
     )
     header = scan_safetensors_header(path)
     return {
@@ -260,7 +264,7 @@ def scan_file(path: Path) -> dict:
 
 
 def _tensor_record(r) -> dict:
-    return {
+    record = {
         "name": r.name,
         "dtype": r.dtype,
         "elements": r.num_elements,
@@ -270,6 +274,16 @@ def _tensor_record(r) -> dict:
         "low_plane": None if r.low_plane_entropy is None else round(r.low_plane_entropy, 4),
         "out_of_range": None if r.out_of_range_fraction is None else round(r.out_of_range_fraction, 6),
     }
+    if r.packed is not None:  # only packed tensors get the key, so existing records do not change
+        record["packed"] = {
+            "format": r.packed.format,
+            "bits": r.packed.bits,
+            "num_values": r.packed.num_values,
+            "value_entropy": round(r.packed.value_entropy, 4),
+            "lane_entropies": [round(e, 4) for e in r.packed.lane_entropies],
+            "plane_one_fractions": [round(f, 4) for f in r.packed.plane_one_fractions],
+        }
+    return record
 
 
 def _container_findings(result) -> list[dict]:
@@ -349,6 +363,10 @@ def scan_repo(api, repo: str, family: str, sha: str, cache: Path, max_gb: float,
     if free < total + DISK_HEADROOM_BYTES:
         raise DiskFull(f"{repo} needs {total / 1e9:.1f} GB plus headroom; {free / 1e9:.1f} GB free")
     try:
+        # Small config files go next to the weights: detect_packed_formats reads the bit width from them.
+        for config in ("quantize_config.json", "config.json"):
+            if any(s.rfilename == config for s in info.siblings):
+                hf_hub_download(repo, config, revision=sha, cache_dir=str(cache))
         for sibling in files:
             started = time.time()
             local = hf_hub_download(repo, sibling.rfilename, revision=sha, cache_dir=str(cache))
@@ -445,12 +463,13 @@ def scan_job(api, kind: str, repo: str, extra: str, sha: str, cache: Path, max_g
 
 # --- Aggregation and report ----------------------------------------------------------
 
-RULES = ("pooled_entropy", "exponent_lane", "out_of_range", "low_plane", "unreadable")
+RULES = ("pooled_entropy", "exponent_lane", "out_of_range", "low_plane", "packed_entropy", "unreadable")
 SEVERITY = {
     "unreadable": "high",
     "exponent_lane": "high",
     "out_of_range": "high",
     "low_plane": "high",
+    "packed_entropy": "high",
     "pooled_entropy": "medium",
 }
 HEADER_SEVERITY = {"metadata": "high", "header_whitespace": "medium", "tensor_name": "medium", "secret": "medium"}

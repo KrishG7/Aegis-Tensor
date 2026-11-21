@@ -79,6 +79,10 @@
     "error": null,
     "sha": "c1899de289a04d12100db370d81485cdf75e47ca"
   },
+  "Qwen/Qwen3-0.6B-FP8": {
+    "error": null,
+    "sha": "e5be08033360965ceca7b0ffd72d521a51331ce0"
+  },
   "Qwen/Qwen3-0.6B-GGUF": {
     "error": null,
     "sha": "23749fefcc72300e3a2ad315e1317431b06b590a"

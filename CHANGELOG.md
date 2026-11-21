@@ -8,6 +8,9 @@ Every PR adds a line under Unreleased.
 
 ## [Unreleased]
 
+### Added
+- `packed_entropy` rule (AEGIS-T007, high): measures the entropy of the unpacked values of GPTQ/AWQ (4/8-bit), bitsandbytes 4-bit and FP8 tensors of at least 100,000 values and flags near-uniform ones. Limits are 3.97 (4-bit), 7.70 (int8) and 7.20 (FP8), from calibration over 11 quantized models (P3). A payload of about 10% of a 4-bit tensor evades it (L04). Needs the lead's approval of the thresholds. C10 is stale until the calibration is re-claimed (#32).
+
 ### Changed
 - Calibration re-run from the pinned lock under the current rules: all 54 safetensors models, 14 MLX models and 14 GGUF files resolved (`unresolved: 0`), including the five that failed to download before. C10 is claimed again over the full set: 1 of 54 safetensors models (the accepted DETR tensor), 0 of 14 MLX, 0 of 14 GGUF files (#48).
 - Calibration report counts each failed file separately (two failed files from one repo were collapsed into one) and names the file; `summary()` gains `unresolved_total`, which includes lock-level failures. `scripts/claims.py` now reports a problem for C10 while anything is unresolved, so a failed model can no longer shrink the claimed set unnoticed (#48).
@@ -18,6 +21,7 @@ Every PR adds a line under Unreleased.
   below it is recorded as an accepted false positive (P2).
 
 ### Added
+- `aegis.packedformat.detect_packed_formats()` finds the packed tensors of a safetensors file (GPTQ/AWQ `qweight` with the bit width from `quantize_config.json` or `config.json`, bitsandbytes 4-bit from its `quant_state` siblings) by reading only the header and those small config files. `benchmarks/calibrate.py` uses it, downloads the two config files next to the weights, and records the packed statistics per tensor, so thresholds for the packed-payload rules (#32, PR 2) can be chosen from real clean models. No rule yet; findings do not change.
 - Packed-value statistics for quantized tensors (#32, PR 1, unpacking only; no new rule): `unpack_stats(format, data, bits)` and an optional `packed_formats` argument to `scan_safetensors` read GPTQ/AWQ int32 words, bitsandbytes 4-bit bytes and FP8 E4M3 values in place from the memory map and report value entropy, per-lane entropy and per-bit-plane one-fractions on `TensorScanResult.packed`. FP8 tensors are detected from their dtype; the others need the format from the repo's config. Findings do not change.
 - Design-history banners on six older documents and tests for those banners and README/docs relative links; corrected or removed unverified research citations and figures.
 - docs/KNOWN_BYPASSES.md: every known bypass and limit, with its evidence and where a fix is tracked.
