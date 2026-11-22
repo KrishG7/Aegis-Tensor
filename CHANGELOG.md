@@ -18,6 +18,7 @@ Every PR adds a line under Unreleased.
   below it is recorded as an accepted false positive (P2).
 
 ### Added
+- Backdoor detection evaluation (`benchmarks/backdoor_eval.py`, report in docs/backdoor_eval.md, data in benchmarks/results/backdoor_eval.json): 16 CIFAR-10 models (4 clean twins, plus badnets, blended, wanet and clean_label with 3 seeds each). Of the 6 attacks that implanted (attack success rate of 80% or more), the Aegis fuzzer flagged 5 and ART Neural Cleanse flagged 0. On the 4 clean twins the fuzzer flagged all 4 and Neural Cleanse flagged none, so at the default threshold of 4.0 the fuzzer does not separate clean models from backdoored ones. Sample sizes are small. No detection rule or threshold changed.
 - Packed-value statistics for quantized tensors (#32, PR 1, unpacking only; no new rule): `unpack_stats(format, data, bits)` and an optional `packed_formats` argument to `scan_safetensors` read GPTQ/AWQ int32 words, bitsandbytes 4-bit bytes and FP8 E4M3 values in place from the memory map and report value entropy, per-lane entropy and per-bit-plane one-fractions on `TensorScanResult.packed`. FP8 tensors are detected from their dtype; the others need the format from the repo's config. Findings do not change.
 - Design-history banners on six older documents and tests for those banners and README/docs relative links; corrected or removed unverified research citations and figures.
 - docs/KNOWN_BYPASSES.md: every known bypass and limit, with its evidence and where a fix is tracked.
