@@ -1,0 +1,417 @@
+[
+ {
+  "attack": "clean",
+  "seed": 0,
+  "clean_acc": 0.871,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 7.238,
+   "layers": [
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4530
+ },
+ {
+  "attack": "clean",
+  "seed": 1,
+  "clean_acc": 0.8755555555555555,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 8.225,
+   "layers": [
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4517
+ },
+ {
+  "attack": "clean",
+  "seed": 2,
+  "clean_acc": 0.8714444444444445,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 7.045,
+   "layers": [
+    "classifier",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4506
+ },
+ {
+  "attack": "clean",
+  "seed": 3,
+  "clean_acc": 0.8747777777777778,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 13.312,
+   "layers": [
+    "features.1.0",
+    "features.1.1",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4442
+ },
+ {
+  "attack": "badnets",
+  "seed": 0,
+  "clean_acc": 0.8638888888888889,
+  "asr": 0.9134948096885813,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 6.744,
+   "layers": [
+    "classifier",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "strip": {
+   "input_detection_rate": 0.254,
+   "input_false_positive_rate": 0.046
+  },
+  "seconds": 4500
+ },
+ {
+  "attack": "badnets",
+  "seed": 1,
+  "clean_acc": 0.8654444444444445,
+  "asr": 0.9239990113692536,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 7.876,
+   "layers": [
+    "classifier",
+    "features.1.0",
+    "features.1.1",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "strip": {
+   "input_detection_rate": 0.33,
+   "input_false_positive_rate": 0.054
+  },
+  "seconds": 4451
+ },
+ {
+  "attack": "badnets",
+  "seed": 2,
+  "clean_acc": 0.8627777777777778,
+  "asr": 0.9314137419673751,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 8.19,
+   "layers": [
+    "classifier",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "strip": {
+   "input_detection_rate": 0.392,
+   "input_false_positive_rate": 0.06
+  },
+  "seconds": 4450
+ },
+ {
+  "attack": "blended",
+  "seed": 0,
+  "clean_acc": 0.8724444444444445,
+  "asr": 0.9991349480968859,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 5.85,
+   "layers": [
+    "features.4.0",
+    "features.4.1",
+    "features.6.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "strip": {
+   "input_detection_rate": 0.0,
+   "input_false_positive_rate": 0.056
+  },
+  "seconds": 4473
+ },
+ {
+  "attack": "blended",
+  "seed": 1,
+  "clean_acc": 0.8728888888888889,
+  "asr": 0.999629263470094,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 6.555,
+   "layers": [
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "strip": {
+   "input_detection_rate": 0.0,
+   "input_false_positive_rate": 0.052
+  },
+  "seconds": 4473
+ },
+ {
+  "attack": "blended",
+  "seed": 2,
+  "clean_acc": 0.8763333333333333,
+  "asr": 0.999876421156698,
+  "aegis": {
+   "flagged": false,
+   "spike_ratio": 2.391,
+   "layers": []
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "strip": {
+   "input_detection_rate": 0.0,
+   "input_false_positive_rate": 0.052
+  },
+  "seconds": 4427
+ },
+ {
+  "attack": "wanet",
+  "seed": 0,
+  "clean_acc": 0.8254444444444444,
+  "asr": 0.7668067226890757,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 8.515,
+   "layers": [
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4383
+ },
+ {
+  "attack": "wanet",
+  "seed": 1,
+  "clean_acc": 0.8374444444444444,
+  "asr": 0.7697726149283243,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 11.517,
+   "layers": [
+    "classifier",
+    "features.1.0",
+    "features.1.1",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4441
+ },
+ {
+  "attack": "wanet",
+  "seed": 2,
+  "clean_acc": 0.8385555555555556,
+  "asr": 0.7563025210084033,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 10.539,
+   "layers": [
+    "classifier",
+    "features.1.0",
+    "features.1.1",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 34522
+ },
+ {
+  "attack": "clean_label",
+  "seed": 0,
+  "clean_acc": 0.8663333333333333,
+  "asr": 0.42560553633217996,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 11.638,
+   "layers": [
+    "features.1.0",
+    "features.1.1",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4647
+ },
+ {
+  "attack": "clean_label",
+  "seed": 1,
+  "clean_acc": 0.8696666666666667,
+  "asr": 0.5191547207118141,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 15.3,
+   "layers": [
+    "features.1.0",
+    "features.1.1",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4691
+ },
+ {
+  "attack": "clean_label",
+  "seed": 2,
+  "clean_acc": 0.8677777777777778,
+  "asr": 0.6478002965892239,
+  "aegis": {
+   "flagged": true,
+   "spike_ratio": 13.15,
+   "layers": [
+    "features.1.0",
+    "features.1.1",
+    "features.3.0",
+    "features.3.1",
+    "features.4.0",
+    "features.4.1",
+    "features.6.0",
+    "features.6.1",
+    "features.7.0",
+    "features.7.1"
+   ]
+  },
+  "nc": {
+   "flagged": false,
+   "classes": []
+  },
+  "seconds": 4600
+ }
+]
